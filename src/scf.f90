@@ -375,11 +375,12 @@ contains
     ! ================================================================
     ! Update P from F:  F_orth -> C_orth -> C -> P = 2 C_occ C_occ^T
     ! ================================================================
-    subroutine update_density(F, X, nocc, P, e_orb)
+    subroutine update_density(F, X, nocc, P, e_orb, C_out)
         implicit none
         real(c_double), intent(in)  :: F(nao,nao), X(nao,nao)
         integer, intent(in) :: nocc
         real(c_double), intent(out) :: P(nao,nao), e_orb(nao)
+        real(c_double), intent(out), optional :: C_out(nao,nao)
         real(c_double), allocatable :: Fo(:,:), Co(:,:), C(:,:), tmp(:,:), wk(:)
         real(c_double) :: wk1(1)
         integer(c_int) :: lwork, info, i
@@ -396,6 +397,7 @@ contains
         if (info /= 0) stop "dsyev failed in update_density"
         deallocate(wk)
         call dgemm('N','N',nao,nao,nao, 1.0d0, X,nao, Co,nao, 0.0d0, C,nao)
+        if (present(C_out)) C_out = C
         P = 0.0d0
         do i = 1, nocc
             call dgemm('N','T',nao,nao,1, 2.0d0, C(:,i),nao, C(:,i),nao, 1.0d0, P,nao)
@@ -499,21 +501,23 @@ contains
     ! ================================================================
     ! Main SCF driver
     ! ================================================================
-    subroutine run_scf(S, Hcore, X, P_in)
+    subroutine run_scf(S, Hcore, X, P_in, C_out)
         implicit none
         real(c_double), intent(in)    :: S(nao,nao), Hcore(nao,nao), X(nao,nao)
         real(c_double), intent(inout) :: P_in(nao,nao)
+        real(c_double), intent(out), optional :: C_out(nao,nao)
 
         real(c_double), allocatable :: F(:,:), P(:,:), err(:,:)
         real(c_double), allocatable :: F_hist(:,:,:), P_hist(:,:,:), e_hist(:,:,:)
         real(c_double), allocatable :: F_extrap(:,:), Q(:,:), e_orb(:)
+        real(c_double), allocatable :: C_last(:,:)
         real(c_double) :: E_elec, E_tot, E_prev, err_norm, E_nuc
         integer :: iter, ns, nocc, env_stat, env_len
         logical :: use_df
         character(len=32) :: fock_method
 
         allocate(F(nao,nao), P(nao,nao), err(nao,nao), F_extrap(nao,nao))
-        allocate(Q(nbas,nbas), e_orb(nao))
+        allocate(Q(nbas,nbas), e_orb(nao), C_last(nao,nao))
         allocate(F_hist(nao,nao,MAX_DIIS), P_hist(nao,nao,MAX_DIIS), e_hist(nao,nao,MAX_DIIS))
 
         nocc  = total_electrons / 2
@@ -521,6 +525,7 @@ contains
         P     = P_in
         E_prev= huge(1.0d0)
         ns    = 0
+        C_last = 0.0d0
         use_df = .false.
         fock_method = 'DIRECT'
 
@@ -572,8 +577,9 @@ contains
                 print *, "  SCF converged!"
                 print "(A, F18.10, A)", "  E_total =", E_tot, " Ha"
                 P_in = P
+                if (present(C_out)) C_out = C_last
                 if (use_df) call clear_df_cache()
-                deallocate(F, P, err, F_extrap, Q, e_orb, F_hist, P_hist, e_hist)
+                deallocate(F, P, err, F_extrap, Q, e_orb, C_last, F_hist, P_hist, e_hist)
                 return
             end if
 
@@ -602,14 +608,15 @@ contains
 
             ! Update density from extrapolated Fock
             E_prev = E_tot
-            call update_density(F_extrap, X, nocc, P, e_orb)
+            call update_density(F_extrap, X, nocc, P, e_orb, C_last)
 
         end do
 
         print *, "  WARNING: SCF did not converge in", MAX_ITER, "cycles"
         P_in = P
+        if (present(C_out)) C_out = C_last
         if (use_df) call clear_df_cache()
-        deallocate(F, P, err, F_extrap, Q, e_orb, F_hist, P_hist, e_hist)
+        deallocate(F, P, err, F_extrap, Q, e_orb, C_last, F_hist, P_hist, e_hist)
     end subroutine run_scf
 
 end module scf_module
