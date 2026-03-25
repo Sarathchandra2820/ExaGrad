@@ -1,10 +1,12 @@
 module one_eints
     use, intrinsic :: iso_c_binding
     use libcint_interface
+    use math_utils
     implicit none
 
     ! Publicly accessible molecule and basis data
     integer :: natm, nbas, env_size, nao
+    integer :: total_electrons
     integer(c_int), allocatable :: atm(:), bas(:)
     real(c_double), allocatable :: env(:)
     integer, allocatable :: ao_loc(:)
@@ -23,6 +25,7 @@ contains
         read(u, *) nbas
         read(u, *) env_size
         read(u, *) nao
+        read(u, *) total_electrons
         close(u)
 
         allocate(atm(natm * 6))
@@ -61,6 +64,7 @@ contains
         print *, "  Atoms:       ", natm
         print *, "  Shells:      ", nbas
         print *, "  AO functions:", nao
+        print *, "  Electrons:   ", total_electrons
     end subroutine init_molecule
 
     ! ------------------------------------------------------------------
@@ -112,5 +116,135 @@ contains
 
         print *, "1-Electron integrals (S, Hcore) built."
     end subroutine build_hcore_overlap
+
+    ! ------------------------------------------------------------------
+    ! build_s_inv: Computes S^{-1/2} from Overlap Matrix S
+    ! ------------------------------------------------------------------
+    subroutine build_s_inv(n, S, S_inv_sqrt)
+        implicit none
+        integer, intent(in) :: n
+        real(c_double), intent(in) :: S(n,n)
+        real(c_double), intent(out) :: S_inv_sqrt(n,n)
+
+        real(c_double), allocatable :: evalS(:), evecS(:,:), work(:)
+        real(c_double), allocatable :: tmp(:,:)
+        integer(c_int) :: lwork, info, i, j
+        real(c_double) :: tmp_work(1)
+
+        allocate(evalS(n))
+        allocate(evecS(n,n))
+        evecS = S
+
+        ! Query optimal workspace for dsyev
+        lwork = -1
+        call dsyev('V', 'U', int(n, c_int), evecS, int(n, c_int), evalS, tmp_work, int(lwork, c_int), info)
+        lwork = int(tmp_work(1))
+        allocate(work(lwork))
+
+        ! Diagonalize S
+        call dsyev('V', 'U', int(n, c_int), evecS, int(n, c_int), evalS, work, int(lwork, c_int), info)
+        if (info /= 0) then
+            print *, "Error in dsyev for S, info = ", info
+            stop
+        end if
+        deallocate(work)
+
+        ! Form s^{-1/2} * U^T = tmp
+        allocate(tmp(n,n))
+        do i = 1, n
+            do j = 1, n
+                if (evalS(i) > 1.0d-12) then
+                    tmp(i,j) = (1.0d0 / sqrt(evalS(i))) * evecS(j,i)
+                else
+                    tmp(i,j) = 0.0d0
+                end if
+            end do
+        end do
+
+        ! Form S^{-1/2} = U * tmp
+        ! S_inv_sqrt = evecS * tmp
+        call dgemm('N', 'N', int(n, c_int), int(n, c_int), int(n, c_int), &
+                   1.0d0, evecS, int(n, c_int), tmp, int(n, c_int), &
+                   0.0d0, S_inv_sqrt, int(n, c_int))
+
+        deallocate(evalS)
+        deallocate(evecS)
+        deallocate(tmp)
+        
+        print *, "S^{-1/2} constructed."
+    end subroutine build_s_inv
+
+    ! ------------------------------------------------------------------
+    ! build_initial_guess: Construct initial density matrix P from Hcore
+    ! ------------------------------------------------------------------
+    subroutine build_initial_guess(n, nelec, Hcore, X, P)
+        implicit none
+        integer, intent(in) :: n, nelec
+        real(c_double), intent(in) :: Hcore(n,n), X(n,n)
+        real(c_double), intent(out) :: P(n,n)
+
+        real(c_double), allocatable :: F_orth(:,:), C_orth(:,:), C(:,:)
+        real(c_double), allocatable :: evalF(:), evecF(:,:), work(:)
+        real(c_double) :: tmp_work(1)
+        integer(c_int) :: lwork, info, i, j, nocc
+
+        allocate(F_orth(n,n))
+        allocate(C(n,n))
+
+        ! F_orth = X^T * Hcore * X
+        ! First do tmp = Hcore * X
+        allocate(C_orth(n,n)) ! use C_orth as tmp space first
+        call dgemm('N', 'N', int(n, c_int), int(n, c_int), int(n, c_int), &
+                   1.0d0, Hcore, int(n, c_int), X, int(n, c_int), &
+                   0.0d0, C_orth, int(n, c_int))
+        ! Now F_orth = X^T * tmp
+        call dgemm('T', 'N', int(n, c_int), int(n, c_int), int(n, c_int), &
+                   1.0d0, X, int(n, c_int), C_orth, int(n, c_int), &
+                   0.0d0, F_orth, int(n, c_int))
+
+        ! Diagonalize F_orth
+        allocate(evalF(n))
+        allocate(evecF(n,n))
+        evecF = F_orth
+
+        lwork = -1
+        call dsyev('V', 'U', int(n, c_int), evecF, int(n, c_int), evalF, tmp_work, int(lwork, c_int), info)
+        lwork = int(tmp_work(1))
+        allocate(work(lwork))
+
+        call dsyev('V', 'U', int(n, c_int), evecF, int(n, c_int), evalF, work, int(lwork, c_int), info)
+        if (info /= 0) then
+            print *, "Error in dsyev for F_orth, info = ", info
+            stop
+        end if
+        deallocate(work)
+
+        ! The eigenvectors of F_orth are C_orth (in evecF)
+        ! MO Coefficients C = X * C_orth
+        call dgemm('N', 'N', int(n, c_int), int(n, c_int), int(n, c_int), &
+                   1.0d0, X, int(n, c_int), evecF, int(n, c_int), &
+                   0.0d0, C, int(n, c_int))
+
+        ! Construct density matrix P
+        ! P_ij = 2.0 * sum_{k=1}^{nocc} C_ik * C_jk
+        nocc = nelec / 2
+        P = 0.0d0
+        do j = 1, n
+            do i = 1, n
+                do lwork = 1, nocc
+                    P(i,j) = P(i,j) + 2.0d0 * C(i,lwork) * C(j,lwork)
+                end do
+            end do
+        end do
+
+        deallocate(F_orth)
+        deallocate(C_orth)
+        deallocate(C)
+        deallocate(evalF)
+        deallocate(evecF)
+        
+        print *, "Initial guess Density Matrix (P) constructed. E_core = ", sum(P * Hcore) / 2.0d0
+        
+    end subroutine build_initial_guess
 
 end module one_eints

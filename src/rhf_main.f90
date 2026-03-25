@@ -1,26 +1,25 @@
 program rhf_main
     use iso_c_binding
     use one_eints
+    use scf_module
     implicit none
 
     real(c_double), allocatable :: S(:,:), Hcore(:,:)
+    real(c_double), allocatable :: S_inv_sqrt(:,:), P(:,:)
 
     print *, "=========================================="
     print *, " Fortran Direct RHF SCF powered by libcint"
     print *, "=========================================="
 
-    ! Step 1: Read basis set and geometry from PySCF export
     call init_molecule()
-
-    ! Step 2: Build the 1-electron integrals S and Hcore
     call build_hcore_overlap(S, Hcore)
 
-    print *, "Hcore(1,1) = ", Hcore(1,1)
-    print *, "S(1,1)     = ", S(1,1)
+    allocate(S_inv_sqrt(nao, nao))
+    call build_s_inv(nao, S, S_inv_sqrt)
 
-    ! Step 3: TODO - build S^{-1/2}, initial guess, Direct SCF loop
-    
+    allocate(P(nao, nao))
+    call build_initial_guess(nao, total_electrons, Hcore, S_inv_sqrt, P)
 
+    call run_scf(S, Hcore, S_inv_sqrt, P)
 
-    
 end program rhf_main
