@@ -6,7 +6,7 @@ RPATH   = -Wl,-rpath,/Users/sarath/anaconda3/lib/python3.11/site-packages/pyscf/
 LIBS    = $(LIBCINT) $(RPATH) -llapack -lblas
 
 # Compilation order matters: modules must be compiled before programs that use them
-OBJS = src/libcint_interface.o src/math_utils.o src/integrals_gen.o src/scf.o src/rhf_main.o
+OBJS = src/libcint_interface.o src/math_utils.o src/integrals_gen.o src/scf.o src/cpks.o src/rhf_main.o
 
 all: rhf_main
 
@@ -17,7 +17,8 @@ rhf_main: $(OBJS)
 src/integrals_gen.o: src/integrals_gen.f90 src/libcint_interface.o src/math_utils.o
 src/math_utils.o:    src/math_utils.f90
 src/scf.o:           src/scf.f90 src/integrals_gen.o src/math_utils.o
-src/rhf_main.o:      src/rhf_main.f90 src/integrals_gen.o src/scf.o
+src/cpks.o:          src/cpks.f90 src/libcint_interface.o src/integrals_gen.o src/math_utils.o
+src/rhf_main.o:      src/rhf_main.f90 src/integrals_gen.o src/scf.o src/cpks.o
 
 src/%.o: src/%.f90
 	$(FC) $(FFLAGS) -Jsrc -o $@ -c $<
