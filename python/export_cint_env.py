@@ -26,6 +26,7 @@ def export_cint_data(xyz_file, basis_name, output_dir):
         f.write(f"{bas.shape[0]}\n") # num shells (nbas)
         f.write(f"{env.shape[0]}\n") # env array size
         f.write(f"{mol.nao}\n") # num AO (spherical)
+        f.write(f"{mol.nelectron}\n") # num electrons
 
     print(f"Exported libcint env data to {output_dir}")
     print(f"Number of Atoms: {atm.shape[0]}")
