@@ -12,6 +12,10 @@ module scf_module
     real(c_double), parameter :: SCHWARZ_TOL = 1.0d-12
     real(c_double), parameter :: ADIIS_THRESH = 0.1d0   ! switch to DIIS below this
 
+    logical :: df_ready = .false.
+    integer :: df_naux = 0
+    real(c_double), allocatable :: df_B(:,:,:)
+
 contains
 
     ! ================================================================
@@ -42,16 +46,16 @@ contains
         implicit none
         real(c_double), intent(out) :: Q(nbas, nbas)
         integer :: shI, shJ, di, dj
-        integer(c_int) :: shls(4), cdims(1), info
+        integer(c_int) :: shls(4), cdims(4), info
         real(c_double), allocatable :: buf(:)
         Q = 0.0d0
-        cdims(1) = 0
         do shI = 1, nbas
             di = ao_loc(shI+1) - ao_loc(shI)
             do shJ = 1, shI
                 dj = ao_loc(shJ+1) - ao_loc(shJ)
                 allocate(buf(di*dj*di*dj))
                 buf = 0.0d0
+                cdims = [int(di,c_int), int(dj,c_int), int(di,c_int), int(dj,c_int)]
                 shls = [shI-1, shJ-1, shI-1, shJ-1]
                 info = cint2e_sph(buf, cdims, shls, atm, natm, bas, nbas, &
                                   env, c_null_ptr, c_null_ptr)
@@ -63,91 +67,291 @@ contains
     end subroutine compute_schwarz
 
     ! ================================================================
-    ! Direct JK build: loop over ALL shell quartets (no symmetry),
-    ! using Cauchy-Schwarz screening for efficiency.
-    ! J(mu,nu) += P(sig,lam)*g,   K(mu,sig) += 0.5*P(nu,lam)*g
-    ! F = Hcore + 2J - K
+    ! Direct JK build with shell-quartet symmetry and OpenMP.
+    !
+    ! Coulomb and exchange must use different canonical shell pairings:
+    !   J  from unique quartets (IJ|KL)
+    !   K  from unique quartets (IK|JL)
+    ! Re-using (IJ|KL) for exchange is incorrect because (IJ|KL) is not
+    ! related to (IK|JL) by the 8-fold permutation symmetry.
+    !
+    ! F = Hcore + J - K    (K already includes factor 0.5)
     ! ================================================================
+
     subroutine build_fock_direct(P, Hcore, Q, F)
         implicit none
         real(c_double), intent(in)  :: P(nao,nao), Hcore(nao,nao), Q(nbas,nbas)
         real(c_double), intent(out) :: F(nao,nao)
         integer :: shI, shJ, shK, shL, ai, aj, ak, al
         integer :: mi, mj, mk, ml, di, dj, dk, dl
-        integer(c_int) :: shls(4), cdims(1), info
-        real(c_double), allocatable :: buf(:,:,:,:), buf_ex(:,:,:,:)
+        logical :: need_j, need_k
+        integer(c_int) :: shls(4), cdims(4), info
         real(c_double), allocatable :: J_mat(:,:), K_mat(:,:)
-        real(c_double) :: Pmax
+        real(c_double) :: Pmax, g
+        integer :: max_ao_per_shell, bufsize
+        real(c_double), allocatable :: buf_j(:), buf_k(:)
+
+        ! Find largest shell dimension for pre-allocating workspace
+        max_ao_per_shell = 0
+        do shI = 1, nbas
+            max_ao_per_shell = max(max_ao_per_shell, ao_loc(shI+1) - ao_loc(shI))
+        end do
+        bufsize = max_ao_per_shell**4
 
         allocate(J_mat(nao,nao), K_mat(nao,nao))
         J_mat = 0.0d0;  K_mat = 0.0d0
-        cdims(1) = 0;   Pmax = maxval(abs(P))
+        Pmax = maxval(abs(P))
+
+        !$omp parallel default(none) &
+        !$omp   shared(nbas, nao, ao_loc, atm, natm, bas, env, P, Q, Pmax, bufsize) &
+        !$omp   private(shI, shJ, shK, shL, di, dj, dk, dl, ai, aj, ak, al, &
+        !$omp           mi, mj, mk, ml, need_j, need_k, shls, cdims, info, buf_j, buf_k, g) &
+        !$omp   reduction(+: J_mat, K_mat)
+        allocate(buf_j(bufsize), buf_k(bufsize))
+        !$omp do schedule(dynamic)
+        do shI = 1, nbas
+            di = ao_loc(shI+1) - ao_loc(shI)
+            do shJ = 1, nbas
+                dj = ao_loc(shJ+1) - ao_loc(shJ)
+                do shK = 1, nbas
+                    dk = ao_loc(shK+1) - ao_loc(shK)
+                    do shL = 1, nbas
+                        dl = ao_loc(shL+1) - ao_loc(shL)
+                        need_j = (Q(shI,shJ)*Q(shK,shL)*Pmax >= SCHWARZ_TOL)
+                        need_k = (Q(shI,shK)*Q(shJ,shL)*Pmax >= SCHWARZ_TOL)
+                        if (.not. need_j .and. .not. need_k) cycle
+
+                        if (need_j) then
+                            buf_j(1:di*dj*dk*dl) = 0.0d0
+                            cdims = [int(di,c_int), int(dj,c_int), int(dk,c_int), int(dl,c_int)]
+                            shls = [shI-1, shJ-1, shK-1, shL-1]
+                            info = cint2e_sph(buf_j, cdims, shls, atm, natm, bas, nbas, &
+                                              env, c_null_ptr, c_null_ptr)
+
+                            do al = 1, dl
+                                ml = ao_loc(shL) + al - 1
+                                do ak = 1, dk
+                                    mk = ao_loc(shK) + ak - 1
+                                    do aj = 1, dj
+                                        mj = ao_loc(shJ) + aj - 1
+                                        do ai = 1, di
+                                            mi = ao_loc(shI) + ai - 1
+                                            g = buf_j((((al-1)*dk + ak-1)*dj + aj-1)*di + ai)
+                                            J_mat(mi,mj) = J_mat(mi,mj) + P(mk,ml) * g
+                                        end do
+                                    end do
+                                end do
+                            end do
+                        end if
+
+                        if (need_k) then
+                            buf_k(1:di*dk*dj*dl) = 0.0d0
+                            cdims = [int(di,c_int), int(dk,c_int), int(dj,c_int), int(dl,c_int)]
+                            shls = [shI-1, shK-1, shJ-1, shL-1]
+                            info = cint2e_sph(buf_k, cdims, shls, atm, natm, bas, nbas, &
+                                              env, c_null_ptr, c_null_ptr)
+
+                            do al = 1, dl
+                                ml = ao_loc(shL) + al - 1
+                                do aj = 1, dj
+                                    mj = ao_loc(shJ) + aj - 1
+                                    do ak = 1, dk
+                                        mk = ao_loc(shK) + ak - 1
+                                        do ai = 1, di
+                                            mi = ao_loc(shI) + ai - 1
+                                            g = buf_k((((al-1)*dj + aj-1)*dk + ak-1)*di + ai)
+                                            K_mat(mi,mj) = K_mat(mi,mj) + 0.5d0 * P(mk,ml) * g
+                                        end do
+                                    end do
+                                end do
+                            end do
+                        end if
+                    end do
+                end do
+            end do
+        end do
+        !$omp end do
+        deallocate(buf_j, buf_k)
+        !$omp end parallel
+        F = Hcore + J_mat - K_mat
+        deallocate(J_mat, K_mat)
+    end subroutine build_fock_direct
+
+    ! ================================================================
+    ! Packed AO-pair index for mu >= nu
+    ! ================================================================
+    pure integer function pair_index(mu, nu) result(p)
+        implicit none
+        integer, intent(in) :: mu, nu
+        p = mu * (mu - 1) / 2 + nu
+    end function pair_index
+
+    ! ================================================================
+    ! Build DF factors B(mu,nu,Q) from AO ERI metric over unique pairs
+    ! (reference implementation; suitable for small/medium systems)
+    ! ================================================================
+    subroutine initialize_df_factors(chol_tol, max_rank)
+        implicit none
+        real(c_double), intent(in), optional :: chol_tol
+        integer, intent(in), optional :: max_rank
+
+        integer :: shI, shJ, shK, shL
+        integer :: di, dj, dk, dl
+        integer :: ai, aj, ak, al
+        integer :: mi, mj, mk, ml, i
+        integer :: p, q, npair, rank_cap, k, piv
+        real(c_double) :: tol, g, pivot_val
+        integer(c_int) :: shls(4), cdims(4), info
+        integer :: max_ao_per_shell, bufsize
+        real(c_double), allocatable :: buf(:), metric(:,:), L(:,:), resid(:), work(:)
+        integer, allocatable :: pair_mu(:), pair_nu(:)
+
+        if (df_ready) return
+
+        tol = 1.0d-10
+        if (present(chol_tol)) tol = chol_tol
+
+        npair = nao * (nao + 1) / 2
+        rank_cap = npair
+        if (present(max_rank)) rank_cap = min(max_rank, npair)
+
+        allocate(pair_mu(npair), pair_nu(npair))
+        p = 0
+        do mi = 1, nao
+            do mj = 1, mi
+                p = p + 1
+                pair_mu(p) = mi
+                pair_nu(p) = mj
+            end do
+        end do
+
+        allocate(metric(npair,npair))
+        metric = 0.0d0
+
+        max_ao_per_shell = 0
+        do shI = 1, nbas
+            max_ao_per_shell = max(max_ao_per_shell, ao_loc(shI+1) - ao_loc(shI))
+        end do
+        bufsize = max_ao_per_shell**4
+        allocate(buf(bufsize))
 
         do shI = 1, nbas
             di = ao_loc(shI+1) - ao_loc(shI)
             do shJ = 1, nbas
                 dj = ao_loc(shJ+1) - ao_loc(shJ)
-                if (Q(shI,shJ) * Pmax < SCHWARZ_TOL) cycle
                 do shK = 1, nbas
                     dk = ao_loc(shK+1) - ao_loc(shK)
                     do shL = 1, nbas
                         dl = ao_loc(shL+1) - ao_loc(shL)
-                        if (Q(shI,shJ)*Q(shK,shL)*Pmax < SCHWARZ_TOL) cycle
-
-                        ! --- Coulomb: (I J | K L) ---
-                        allocate(buf(di,dj,dk,dl))
-                        buf = 0.0d0
-                        shls = [shI-1, shJ-1, shK-1, shL-1]
-                        info = cint2e_sph(buf, cdims, shls, atm, natm, bas, nbas, &
-                                          env, c_null_ptr, c_null_ptr)
-
+                        cdims = [int(di,c_int), int(dj,c_int), int(dk,c_int), int(dl,c_int)]
+                        shls  = [shI-1, shJ-1, shK-1, shL-1]
+                        info  = cint2e_sph(buf, cdims, shls, atm, natm, bas, nbas, env, c_null_ptr, c_null_ptr)
                         do al = 1, dl
                             ml = ao_loc(shL) + al - 1
                             do ak = 1, dk
                                 mk = ao_loc(shK) + ak - 1
+                                q = pair_index(max(mk,ml), min(mk,ml))
                                 do aj = 1, dj
                                     mj = ao_loc(shJ) + aj - 1
                                     do ai = 1, di
                                         mi = ao_loc(shI) + ai - 1
-                                        J_mat(mi,mj) = J_mat(mi,mj) + P(mk,ml)*buf(ai,aj,ak,al)
+                                        p = pair_index(max(mi,mj), min(mi,mj))
+                                        g = buf((((al-1)*dk + ak-1)*dj + aj-1)*di + ai)
+                                        metric(p,q) = g
+                                        metric(q,p) = g
                                     end do
                                 end do
                             end do
                         end do
-                        deallocate(buf)
-
-                        ! --- Exchange: (I K | J L) -> K(mu,nu) = sum P(sig,lam)*(mu sig|nu lam) ---
-                        allocate(buf_ex(di,dk,dj,dl))
-                        buf_ex = 0.0d0
-                        shls = [shI-1, shK-1, shJ-1, shL-1]
-                        info = cint2e_sph(buf_ex, cdims, shls, atm, natm, bas, nbas, &
-                                          env, c_null_ptr, c_null_ptr)
-
-                        do al = 1, dl
-                            ml = ao_loc(shL) + al - 1
-                            do ak = 1, dk
-                                mk = ao_loc(shK) + ak - 1
-                                do aj = 1, dj
-                                    mj = ao_loc(shJ) + aj - 1
-                                    do ai = 1, di
-                                        mi = ao_loc(shI) + ai - 1
-                                        K_mat(mi,mj) = K_mat(mi,mj) + 0.5d0*P(mk,ml)*buf_ex(ai,ak,aj,al)
-                                    end do
-                                end do
-                            end do
-                        end do
-                        deallocate(buf_ex)
                     end do
                 end do
             end do
         end do
+        deallocate(buf)
 
-        F = Hcore + 2.0d0*J_mat - K_mat
+        allocate(L(npair, rank_cap), resid(npair), work(npair))
+        L = 0.0d0
+        do i = 1, npair
+            resid(i) = max(0.0d0, metric(i,i))
+        end do
+        df_naux = 0
 
-        ! DEBUG
-        write(*,'(A,F14.8,A,F14.8,A,F14.8)') "  DEBUG F(1,1)=", F(1,1), " J(1,1)=", J_mat(1,1), " K(1,1)=", K_mat(1,1)
-        deallocate(J_mat, K_mat)
-    end subroutine build_fock_direct
+        do k = 1, rank_cap
+            piv = maxloc(resid, 1)
+            pivot_val = resid(piv)
+            if (pivot_val < tol) exit
+
+            work = metric(:,piv)
+            if (k > 1) work = work - matmul(L(:,1:k-1), L(piv,1:k-1))
+
+            L(:,k) = work / sqrt(pivot_val)
+            resid = resid - L(:,k) * L(:,k)
+            where (resid < 0.0d0) resid = 0.0d0
+            df_naux = k
+        end do
+
+        if (allocated(df_B)) deallocate(df_B)
+        allocate(df_B(nao,nao,df_naux))
+        df_B = 0.0d0
+
+        do k = 1, df_naux
+            do p = 1, npair
+                mi = pair_mu(p)
+                mj = pair_nu(p)
+                g = L(p,k)
+                df_B(mi,mj,k) = g
+                df_B(mj,mi,k) = g
+            end do
+        end do
+
+        df_ready = .true.
+
+        deallocate(metric, L, resid, work, pair_mu, pair_nu)
+    end subroutine initialize_df_factors
+
+    ! ================================================================
+    ! Density-fitted Fock build
+    ! ERI approx: (mu nu|la si) ~= sum_Q B(mu,nu,Q) B(la,si,Q)
+    ! ================================================================
+    subroutine build_fock_df(P, Hcore, F)
+        implicit none
+        real(c_double), intent(in)  :: P(nao,nao), Hcore(nao,nao)
+        real(c_double), intent(out) :: F(nao,nao)
+
+        integer :: q
+        real(c_double), allocatable :: J_mat(:,:), K_mat(:,:), T(:,:), z(:)
+
+        if (.not. df_ready) call initialize_df_factors()
+        if (df_naux <= 0) stop "DF initialization failed: no auxiliary rank"
+
+        allocate(J_mat(nao,nao), K_mat(nao,nao), T(nao,nao), z(df_naux))
+        J_mat = 0.0d0
+        K_mat = 0.0d0
+
+        do q = 1, df_naux
+            z(q) = sum(P * df_B(:,:,q))
+            J_mat = J_mat + z(q) * df_B(:,:,q)
+        end do
+
+        do q = 1, df_naux
+            call dgemm('N','N',nao,nao,nao, 1.0d0, df_B(:,:,q),nao, P,nao, 0.0d0, T,nao)
+            call dgemm('N','T',nao,nao,nao, 1.0d0, T,nao, df_B(:,:,q),nao, 1.0d0, K_mat,nao)
+        end do
+
+        F = Hcore + J_mat - 0.5d0 * K_mat
+
+        deallocate(J_mat, K_mat, T, z)
+    end subroutine build_fock_df
+
+    ! ================================================================
+    ! Release cached DF tensors
+    ! ================================================================
+    subroutine clear_df_cache()
+        implicit none
+        if (allocated(df_B)) deallocate(df_B)
+        df_naux = 0
+        df_ready = .false.
+    end subroutine clear_df_cache
 
     ! ================================================================
     ! DIIS error: e = FPS - SPF  (return max-norm)
@@ -304,7 +508,9 @@ contains
         real(c_double), allocatable :: F_hist(:,:,:), P_hist(:,:,:), e_hist(:,:,:)
         real(c_double), allocatable :: F_extrap(:,:), Q(:,:), e_orb(:)
         real(c_double) :: E_elec, E_tot, E_prev, err_norm, E_nuc
-        integer :: iter, ns, nocc
+        integer :: iter, ns, nocc, env_stat, env_len
+        logical :: use_df
+        character(len=32) :: fock_method
 
         allocate(F(nao,nao), P(nao,nao), err(nao,nao), F_extrap(nao,nao))
         allocate(Q(nbas,nbas), e_orb(nao))
@@ -315,17 +521,41 @@ contains
         P     = P_in
         E_prev= huge(1.0d0)
         ns    = 0
+        use_df = .false.
+        fock_method = 'DIRECT'
+
+        call get_environment_variable('EXAGRAD_FOCK_BUILDER', fock_method, length=env_len, status=env_stat)
+        if (env_stat == 0) then
+            fock_method = adjustl(fock_method(1:env_len))
+            if (trim(fock_method) == 'df' .or. trim(fock_method) == 'DF' .or. &
+                trim(fock_method) == 'density_fitting' .or. trim(fock_method) == 'DENSITY_FITTING') then
+                use_df = .true.
+            end if
+        end if
 
         print *, ""
-        print *, "  ------ Direct RHF SCF ------"
+        if (use_df) then
+            print *, "  ------ RHF SCF (DF-JK) ------"
+        else
+            print *, "  ------ RHF SCF (Direct-JK) ------"
+        end if
         print *, "  E_nuc =", E_nuc, " Ha"
         print "(A5, A20, A18, A12)", "  Iter", "E_total (Ha)", "|dE|", "|FPS-SPF|"
 
-        call compute_schwarz(Q)
+        if (.not. use_df) then
+            call compute_schwarz(Q)
+        else
+            call initialize_df_factors()
+            print "(A, I8)", "  DF auxiliary rank =", df_naux
+        end if
 
         do iter = 1, MAX_ITER
             ! Build Fock from current density
-            call build_fock_direct(P, Hcore, Q, F)
+            if (use_df) then
+                call build_fock_df(P, Hcore, F)
+            else
+                call build_fock_direct(P, Hcore, Q, F)
+            end if
 
             ! Electronic energy
             E_elec = 0.5d0 * sum(P * (Hcore + F))
@@ -342,6 +572,7 @@ contains
                 print *, "  SCF converged!"
                 print "(A, F18.10, A)", "  E_total =", E_tot, " Ha"
                 P_in = P
+                if (use_df) call clear_df_cache()
                 deallocate(F, P, err, F_extrap, Q, e_orb, F_hist, P_hist, e_hist)
                 return
             end if
@@ -377,6 +608,7 @@ contains
 
         print *, "  WARNING: SCF did not converge in", MAX_ITER, "cycles"
         P_in = P
+        if (use_df) call clear_df_cache()
         deallocate(F, P, err, F_extrap, Q, e_orb, F_hist, P_hist, e_hist)
     end subroutine run_scf
 

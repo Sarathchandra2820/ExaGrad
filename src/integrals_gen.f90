@@ -74,7 +74,7 @@ contains
         implicit none
         real(c_double), allocatable, intent(out) :: S(:,:), Hcore(:,:)
 
-        integer(c_int) :: shls(2), cdims(1), i, j, ao_i, ao_j, p
+        integer(c_int) :: shls(2), cdims(2), i, j, ao_i, ao_j, p
         integer :: dim_i, dim_j
         real(c_double), allocatable :: buf(:,:)
 
@@ -82,13 +82,13 @@ contains
         allocate(Hcore(nao, nao))
         S     = 0.0d0
         Hcore = 0.0d0
-        cdims(1) = 0
 
         do i = 1, nbas
             dim_i = ao_loc(i+1) - ao_loc(i)
             do j = 1, nbas
                 dim_j = ao_loc(j+1) - ao_loc(j)
                 allocate(buf(dim_i, dim_j))
+                cdims = [int(dim_i, c_int), int(dim_j, c_int)]
 
                 shls(1) = i - 1   ! libcint uses 0-based shell indices
                 shls(2) = j - 1
@@ -243,7 +243,7 @@ contains
         deallocate(evalF)
         deallocate(evecF)
         
-        print *, "Initial guess Density Matrix (P) constructed. E_core = ", sum(P * Hcore) / 2.0d0
+        print *, "Initial guess Density Matrix (P) constructed."
         
     end subroutine build_initial_guess
 
