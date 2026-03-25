@@ -1,0 +1,36 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     test_overlap
+relocations:
+  - { offsetInCU: 0x154, offset: 0x154, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___copy___iso_c_binding_C_ptr, symObjAddr: 0x0, symBinAddr: 0x100007D34, symSize: 0x24 }
+  - { offsetInCU: 0x9E, offset: 0x9E, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___def_init___iso_c_binding_C_funptr, symObjAddr: 0xAA0, symBinAddr: 0x1000181B8, symSize: 0x0 }
+  - { offsetInCU: 0xAF, offset: 0xAF, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___def_init___iso_c_binding_C_ptr, symObjAddr: 0xAA8, symBinAddr: 0x1000181C0, symSize: 0x0 }
+  - { offsetInCU: 0x129, offset: 0x129, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___vtab___iso_c_binding_C_funptr, symObjAddr: 0x48, symBinAddr: 0x1000180D8, symSize: 0x0 }
+  - { offsetInCU: 0x13A, offset: 0x13A, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___vtab___iso_c_binding_C_ptr, symObjAddr: 0x80, symBinAddr: 0x100018110, symSize: 0x0 }
+  - { offsetInCU: 0x154, offset: 0x154, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___copy___iso_c_binding_C_funptr, symObjAddr: 0x24, symBinAddr: 0x100007D58, symSize: 0x24 }
+  - { offsetInCU: 0x18D, offset: 0x18D, size: 0x8, addend: 0x0, symName: ___libcint_interface_MOD___copy___iso_c_binding_C_ptr, symObjAddr: 0x0, symBinAddr: 0x100007D34, symSize: 0x24 }
+  - { offsetInCU: 0x14D, offset: 0x361, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___copy___iso_c_binding_C_ptr, symObjAddr: 0x0, symBinAddr: 0x100007D7C, symSize: 0x24 }
+  - { offsetInCU: 0x97, offset: 0x2AB, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___def_init___iso_c_binding_C_funptr, symObjAddr: 0xA58, symBinAddr: 0x1000181C8, symSize: 0x0 }
+  - { offsetInCU: 0xA8, offset: 0x2BC, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___def_init___iso_c_binding_C_ptr, symObjAddr: 0xA60, symBinAddr: 0x1000181D0, symSize: 0x0 }
+  - { offsetInCU: 0x122, offset: 0x336, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___vtab___iso_c_binding_C_funptr, symObjAddr: 0x48, symBinAddr: 0x100018148, symSize: 0x0 }
+  - { offsetInCU: 0x133, offset: 0x347, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___vtab___iso_c_binding_C_ptr, symObjAddr: 0x80, symBinAddr: 0x100018180, symSize: 0x0 }
+  - { offsetInCU: 0x14D, offset: 0x361, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___copy___iso_c_binding_C_funptr, symObjAddr: 0x24, symBinAddr: 0x100007DA0, symSize: 0x24 }
+  - { offsetInCU: 0x186, offset: 0x39A, size: 0x8, addend: 0x0, symName: ___math_utils_MOD___copy___iso_c_binding_C_ptr, symObjAddr: 0x0, symBinAddr: 0x100007D7C, symSize: 0x24 }
+  - { offsetInCU: 0x150, offset: 0x578, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_build_initial_guess, symObjAddr: 0x0, symBinAddr: 0x100007DC4, symSize: 0x2798 }
+  - { offsetInCU: 0x88, offset: 0x4B0, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_ao_loc, symObjAddr: 0xE5E8, symBinAddr: 0x1000181D8, symSize: 0x0 }
+  - { offsetInCU: 0x9C, offset: 0x4C4, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_atm, symObjAddr: 0xE628, symBinAddr: 0x100018218, symSize: 0x0 }
+  - { offsetInCU: 0xB6, offset: 0x4DE, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_bas, symObjAddr: 0xE668, symBinAddr: 0x100018258, symSize: 0x0 }
+  - { offsetInCU: 0xD0, offset: 0x4F8, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_env, symObjAddr: 0xE6A8, symBinAddr: 0x100018298, symSize: 0x0 }
+  - { offsetInCU: 0xF4, offset: 0x51C, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_env_size, symObjAddr: 0xE6E8, symBinAddr: 0x1000182D8, symSize: 0x0 }
+  - { offsetInCU: 0x104, offset: 0x52C, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_nao, symObjAddr: 0xE6EC, symBinAddr: 0x1000182DC, symSize: 0x0 }
+  - { offsetInCU: 0x120, offset: 0x548, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_natm, symObjAddr: 0xE6F0, symBinAddr: 0x1000182E0, symSize: 0x0 }
+  - { offsetInCU: 0x13A, offset: 0x562, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_nbas, symObjAddr: 0xE6F4, symBinAddr: 0x1000182E4, symSize: 0x0 }
+  - { offsetInCU: 0x16A, offset: 0x592, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_total_electrons, symObjAddr: 0xE6F8, symBinAddr: 0x1000182E8, symSize: 0x0 }
+  - { offsetInCU: 0x18A, offset: 0x5B2, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_init_molecule, symObjAddr: 0x77DC, symBinAddr: 0x10000F5A0, symSize: 0x1468 }
+  - { offsetInCU: 0x200, offset: 0x628, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_build_hcore_overlap, symObjAddr: 0x42D8, symBinAddr: 0x10000C09C, symSize: 0x3504 }
+  - { offsetInCU: 0x2AC, offset: 0x6D4, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_build_s_inv, symObjAddr: 0x2798, symBinAddr: 0x10000A55C, symSize: 0x1B40 }
+  - { offsetInCU: 0x3D7, offset: 0x7FF, size: 0x8, addend: 0x0, symName: ___one_eints_MOD_build_initial_guess, symObjAddr: 0x0, symBinAddr: 0x100007DC4, symSize: 0x2798 }
+  - { offsetInCU: 0x14F, offset: 0xE73, size: 0x8, addend: 0x0, symName: _MAIN__, symObjAddr: 0x0, symBinAddr: 0x100010A08, symSize: 0xBAC }
+  - { offsetInCU: 0x47, offset: 0xD6B, size: 0x8, addend: 0x0, symName: _MAIN__, symObjAddr: 0x0, symBinAddr: 0x100010A08, symSize: 0xBAC }
+  - { offsetInCU: 0xFC, offset: 0xE20, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0xBAC, symBinAddr: 0x1000115B4, symSize: 0x3C }
+...
