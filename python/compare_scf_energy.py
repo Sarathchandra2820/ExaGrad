@@ -15,9 +15,11 @@ def parse_fortran_energy(log_path: Path) -> float:
     return float(matches[-1])
 
 
-def compute_pyscf_energy(xyz: str, basis: str) -> float:
+def compute_pyscf_energy(xyz: str, basis: str, method: str, auxbasis: str) -> float:
     mol = gto.M(atom=xyz, basis=basis, cart=False, verbose=0)
     mf = scf.RHF(mol)
+    if method == "true_df":
+        mf = mf.density_fit(auxbasis=auxbasis)
     return float(mf.kernel())
 
 
@@ -26,6 +28,8 @@ def main() -> int:
     parser.add_argument("--xyz", required=True, help="Path to geometry .xyz file")
     parser.add_argument("--basis", required=True, help="Basis set name, e.g. sto-6g")
     parser.add_argument("--fortran-log", required=True, help="Path to captured Fortran output log")
+    parser.add_argument("--fortran-method", default="direct", help="Fortran mode: direct|cholesky|block_cholesky|true_df")
+    parser.add_argument("--auxbasis", default="weigend", help="Auxiliary basis used for true_df PySCF reference")
     parser.add_argument("--tolerance", type=float, default=1.0e-6, help="Absolute tolerance for energy difference")
     args = parser.parse_args()
 
@@ -41,7 +45,7 @@ def main() -> int:
         return 2
 
     try:
-        e_pyscf = compute_pyscf_energy(args.xyz, args.basis)
+        e_pyscf = compute_pyscf_energy(args.xyz, args.basis, args.fortran_method.lower(), args.auxbasis)
     except Exception as exc:
         print(f"ERROR: Failed to compute PySCF energy: {exc}")
         return 2

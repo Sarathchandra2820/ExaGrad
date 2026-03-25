@@ -1,5 +1,6 @@
 module scf_module
     use iso_c_binding
+    use omp_lib, only: omp_get_max_threads, omp_get_num_threads, omp_get_thread_num
     use one_eints
     use libcint_interface
     use math_utils
@@ -13,8 +14,15 @@ module scf_module
     real(c_double), parameter :: ADIIS_THRESH = 0.1d0   ! switch to DIIS below this
 
     logical :: df_ready = .false.
+    logical :: df_omp_reported = .false.
+    logical :: df_block_omp_reported = .false.
     integer :: df_naux = 0
     real(c_double), allocatable :: df_B(:,:,:)
+
+    logical :: true_df_ready = .false.
+    logical :: true_df_omp_reported = .false.
+    integer :: true_df_naux = 0
+    real(c_double), allocatable :: true_df_B(:,:,:)
 
 contains
 
@@ -233,9 +241,18 @@ contains
             max_ao_per_shell = max(max_ao_per_shell, ao_loc(shI+1) - ao_loc(shI))
         end do
         bufsize = max_ao_per_shell**4
-        allocate(buf(bufsize))
 
+        print "(A, I4, A)", "  Building DF metric (", omp_get_max_threads(), " threads) …"
+
+        ! Parallelize over outermost shell index; each thread allocates its own
+        ! integral buffer.  Multiple shI values can produce the same AO-pair
+        ! index p when shJ > shI swaps mi/mj, so metric writes use atomic.
+        !$omp parallel do default(none) schedule(dynamic) &
+        !$omp   shared(nbas, nao, ao_loc, atm, natm, bas, env, metric, bufsize) &
+        !$omp   private(shI, shJ, shK, shL, di, dj, dk, dl, ai, aj, ak, al, &
+        !$omp           mi, mj, mk, ml, p, q, g, shls, cdims, info, buf)
         do shI = 1, nbas
+            allocate(buf(bufsize))
             di = ao_loc(shI+1) - ao_loc(shI)
             do shJ = 1, nbas
                 dj = ao_loc(shJ+1) - ao_loc(shJ)
@@ -257,7 +274,9 @@ contains
                                         mi = ao_loc(shI) + ai - 1
                                         p = pair_index(max(mi,mj), min(mi,mj))
                                         g = buf((((al-1)*dk + ak-1)*dj + aj-1)*di + ai)
+                                        !$omp atomic write
                                         metric(p,q) = g
+                                        !$omp atomic write
                                         metric(q,p) = g
                                     end do
                                 end do
@@ -266,8 +285,9 @@ contains
                     end do
                 end do
             end do
+            deallocate(buf)
         end do
-        deallocate(buf)
+        !$omp end parallel do
 
         allocate(L(npair, rank_cap), resid(npair), work(npair))
         L = 0.0d0
@@ -282,7 +302,10 @@ contains
             if (pivot_val < tol) exit
 
             work = metric(:,piv)
-            if (k > 1) work = work - matmul(L(:,1:k-1), L(piv,1:k-1))
+            ! dgemv lets OpenBLAS thread the projection step: work -= L * L(piv,:)
+            ! L(piv,1) with stride npair accesses row piv across all k-1 columns
+            if (k > 1) call dgemv('N', npair, k-1, -1.0d0, &
+                                  L(1,1), npair, L(piv,1), npair, 1.0d0, work(1), 1)
 
             L(:,k) = work / sqrt(pivot_val)
             resid = resid - L(:,k) * L(:,k)
@@ -318,30 +341,266 @@ contains
         real(c_double), intent(in)  :: P(nao,nao), Hcore(nao,nao)
         real(c_double), intent(out) :: F(nao,nao)
 
-        integer :: q
-        real(c_double), allocatable :: J_mat(:,:), K_mat(:,:), T(:,:), z(:)
+        integer :: q, team_threads
+        real(c_double) :: zq
+        real(c_double), allocatable :: J_mat(:,:), K_mat(:,:)
+        real(c_double), allocatable :: J_local(:,:), K_local(:,:), T_local(:,:)
 
         if (.not. df_ready) call initialize_df_factors()
         if (df_naux <= 0) stop "DF initialization failed: no auxiliary rank"
 
-        allocate(J_mat(nao,nao), K_mat(nao,nao), T(nao,nao), z(df_naux))
+        allocate(J_mat(nao,nao), K_mat(nao,nao))
         J_mat = 0.0d0
         K_mat = 0.0d0
+        team_threads = 1
 
-        do q = 1, df_naux
-            z(q) = sum(P * df_B(:,:,q))
-            J_mat = J_mat + z(q) * df_B(:,:,q)
-        end do
+        !$omp parallel default(none) &
+        !$omp   shared(df_naux, nao, P, df_B, J_mat, K_mat, team_threads) &
+        !$omp   private(q, zq, J_local, K_local, T_local)
+        allocate(J_local(nao,nao), K_local(nao,nao), T_local(nao,nao))
+        J_local = 0.0d0
+        K_local = 0.0d0
 
+        !$omp single
+        team_threads = omp_get_num_threads()
+        !$omp end single
+
+        !$omp do schedule(dynamic)
         do q = 1, df_naux
-            call dgemm('N','N',nao,nao,nao, 1.0d0, df_B(:,:,q),nao, P,nao, 0.0d0, T,nao)
-            call dgemm('N','T',nao,nao,nao, 1.0d0, T,nao, df_B(:,:,q),nao, 1.0d0, K_mat,nao)
+            zq = sum(P * df_B(:,:,q))
+            J_local = J_local + zq * df_B(:,:,q)
+
+            call dgemm('N','N',nao,nao,nao, 1.0d0, df_B(:,:,q),nao, P,nao, 0.0d0, T_local,nao)
+            call dgemm('N','T',nao,nao,nao, 1.0d0, T_local,nao, df_B(:,:,q),nao, 1.0d0, K_local,nao)
         end do
+        !$omp end do
+
+        !$omp critical
+        J_mat = J_mat + J_local
+        K_mat = K_mat + K_local
+        !$omp end critical
+
+        deallocate(J_local, K_local, T_local)
+        !$omp end parallel
+
+        if (.not. df_omp_reported) then
+            print "(A, I4)", "  DF OpenMP team size =", team_threads
+            df_omp_reported = .true.
+        end if
 
         F = Hcore + J_mat - 0.5d0 * K_mat
 
-        deallocate(J_mat, K_mat, T, z)
+        deallocate(J_mat, K_mat)
     end subroutine build_fock_df
+
+    ! ================================================================
+    ! Density-fitted Fock build (blocked over auxiliary index Q)
+    ! Each thread processes multiple small static Q-blocks.
+    ! ================================================================
+    subroutine build_fock_df_block(P, Hcore, F, block_q)
+        implicit none
+        real(c_double), intent(in)  :: P(nao,nao), Hcore(nao,nao)
+        real(c_double), intent(out) :: F(nao,nao)
+        integer, intent(in), optional :: block_q
+
+        integer :: q, q0, q1, b, nblocks, bs
+        integer :: tid, nthreads, team_threads
+        real(c_double) :: zq
+        real(c_double), allocatable :: J_mat(:,:), K_mat(:,:)
+        real(c_double), allocatable :: J_local(:,:), K_local(:,:), T_local(:,:)
+
+        if (.not. df_ready) call initialize_df_factors()
+        if (df_naux <= 0) stop "DF initialization failed: no auxiliary rank"
+
+        bs = 16
+        if (present(block_q)) bs = max(1, block_q)
+        nblocks = (df_naux + bs - 1) / bs
+
+        allocate(J_mat(nao,nao), K_mat(nao,nao))
+        J_mat = 0.0d0
+        K_mat = 0.0d0
+        team_threads = 1
+
+        !$omp parallel default(none) &
+        !$omp   shared(df_naux, nao, P, df_B, J_mat, K_mat, nblocks, bs, team_threads) &
+        !$omp   private(q, q0, q1, b, tid, nthreads, zq, J_local, K_local, T_local)
+        allocate(J_local(nao,nao), K_local(nao,nao), T_local(nao,nao))
+        J_local = 0.0d0
+        K_local = 0.0d0
+
+        tid = omp_get_thread_num()
+        nthreads = omp_get_num_threads()
+
+        !$omp single
+        team_threads = nthreads
+        !$omp end single
+
+        do b = tid + 1, nblocks, nthreads
+            q0 = (b - 1) * bs + 1
+            q1 = min(df_naux, b * bs)
+            do q = q0, q1
+                zq = sum(P * df_B(:,:,q))
+                J_local = J_local + zq * df_B(:,:,q)
+
+                call dgemm('N','N',nao,nao,nao, 1.0d0, df_B(:,:,q),nao, P,nao, 0.0d0, T_local,nao)
+                call dgemm('N','T',nao,nao,nao, 1.0d0, T_local,nao, df_B(:,:,q),nao, 1.0d0, K_local,nao)
+            end do
+        end do
+
+        !$omp critical
+        J_mat = J_mat + J_local
+        K_mat = K_mat + K_local
+        !$omp end critical
+
+        deallocate(J_local, K_local, T_local)
+        !$omp end parallel
+
+        if (.not. df_block_omp_reported) then
+            print "(A, I4, A, I4)", "  DF-Block OpenMP team size =", team_threads, ", Q-block =", bs
+            df_block_omp_reported = .true.
+        end if
+
+        F = Hcore + J_mat - 0.5d0 * K_mat
+
+        deallocate(J_mat, K_mat)
+    end subroutine build_fock_df_block
+
+    ! ================================================================
+    ! True DF factors from hybrid export:
+    !   ints/df_info.txt: nao, naux, npair
+    !   ints/df_cderi.txt: packed lower-triangular rows cderi(Q,pair)
+    !   ints/aux_info.txt: auxiliary metadata (for consistency checks)
+    ! ================================================================
+    subroutine initialize_true_df_factors()
+        implicit none
+        integer :: i, j, q, p, mu, nu, nao_file, ios, npair_file, npair
+        integer :: natm_aux, nbas_aux, env_aux_size, naux_aux
+        real(c_double) :: val
+        integer, allocatable :: pair_mu(:), pair_nu(:)
+
+        if (true_df_ready) return
+
+        open(unit=41, file='ints/df_info.txt', status='old', action='read', iostat=ios)
+        if (ios /= 0) stop "Could not open ints/df_info.txt for true DF"
+        read(41, *, iostat=ios) nao_file
+        if (ios /= 0) stop "Failed reading nao from ints/df_info.txt"
+        read(41, *, iostat=ios) true_df_naux
+        if (ios /= 0) stop "Failed reading naux from ints/df_info.txt"
+        read(41, *, iostat=ios) npair_file
+        if (ios /= 0) stop "Failed reading npair from ints/df_info.txt"
+        close(41)
+
+        if (nao_file /= nao) stop "True DF file nao does not match current molecule"
+        if (true_df_naux <= 0) stop "True DF has non-positive auxiliary dimension"
+        npair = nao * (nao + 1) / 2
+        if (npair_file /= npair) stop "True DF packed size mismatch"
+
+        open(unit=43, file='ints/aux_info.txt', status='old', action='read', iostat=ios)
+        if (ios == 0) then
+            read(43, *, iostat=ios) natm_aux
+            if (ios /= 0) stop "Failed reading natm_aux from ints/aux_info.txt"
+            read(43, *, iostat=ios) nbas_aux
+            if (ios /= 0) stop "Failed reading nbas_aux from ints/aux_info.txt"
+            read(43, *, iostat=ios) env_aux_size
+            if (ios /= 0) stop "Failed reading env_aux_size from ints/aux_info.txt"
+            read(43, *, iostat=ios) naux_aux
+            if (ios /= 0) stop "Failed reading naux_aux from ints/aux_info.txt"
+            close(43)
+            if (naux_aux /= true_df_naux) stop "aux_info naux does not match df_info naux"
+        end if
+
+        if (allocated(true_df_B)) deallocate(true_df_B)
+        allocate(true_df_B(nao, nao, true_df_naux))
+        true_df_B = 0.0d0
+
+        allocate(pair_mu(npair), pair_nu(npair))
+        p = 0
+        do mu = 1, nao
+            do nu = 1, mu
+                p = p + 1
+                pair_mu(p) = mu
+                pair_nu(p) = nu
+            end do
+        end do
+
+        open(unit=42, file='ints/df_cderi.txt', status='old', action='read', iostat=ios)
+        if (ios /= 0) stop "Could not open ints/df_cderi.txt for true DF"
+        do q = 1, true_df_naux
+            do p = 1, npair
+                read(42, *, iostat=ios) val
+                if (ios /= 0) stop "Failed reading ints/df_cderi.txt"
+                i = pair_mu(p)
+                j = pair_nu(p)
+                true_df_B(i,j,q) = val
+                true_df_B(j,i,q) = val
+            end do
+        end do
+        close(42)
+
+        deallocate(pair_mu, pair_nu)
+
+        true_df_ready = .true.
+        print "(A, I8)", "  True-DF auxiliary rank =", true_df_naux
+        print "(A)", "  True-DF source: packed cderi + aux metadata"
+    end subroutine initialize_true_df_factors
+
+    ! ================================================================
+    ! True density-fitted Fock build using exported B(mu,nu,Q)
+    ! ================================================================
+    subroutine build_fock_true_df(P, Hcore, F)
+        implicit none
+        real(c_double), intent(in)  :: P(nao,nao), Hcore(nao,nao)
+        real(c_double), intent(out) :: F(nao,nao)
+
+        integer :: q, team_threads
+        real(c_double) :: zq
+        real(c_double), allocatable :: J_mat(:,:), K_mat(:,:)
+        real(c_double), allocatable :: J_local(:,:), K_local(:,:), T_local(:,:)
+
+        if (.not. true_df_ready) call initialize_true_df_factors()
+
+        allocate(J_mat(nao,nao), K_mat(nao,nao))
+        J_mat = 0.0d0
+        K_mat = 0.0d0
+        team_threads = 1
+
+        !$omp parallel default(none) &
+        !$omp   shared(true_df_naux, nao, P, true_df_B, J_mat, K_mat, team_threads) &
+        !$omp   private(q, zq, J_local, K_local, T_local)
+        allocate(J_local(nao,nao), K_local(nao,nao), T_local(nao,nao))
+        J_local = 0.0d0
+        K_local = 0.0d0
+
+        !$omp single
+        team_threads = omp_get_num_threads()
+        !$omp end single
+
+        !$omp do schedule(dynamic)
+        do q = 1, true_df_naux
+            zq = sum(P * true_df_B(:,:,q))
+            J_local = J_local + zq * true_df_B(:,:,q)
+
+            call dgemm('N','N',nao,nao,nao, 1.0d0, true_df_B(:,:,q),nao, P,nao, 0.0d0, T_local,nao)
+            call dgemm('N','T',nao,nao,nao, 1.0d0, T_local,nao, true_df_B(:,:,q),nao, 1.0d0, K_local,nao)
+        end do
+        !$omp end do
+
+        !$omp critical
+        J_mat = J_mat + J_local
+        K_mat = K_mat + K_local
+        !$omp end critical
+
+        deallocate(J_local, K_local, T_local)
+        !$omp end parallel
+
+        if (.not. true_df_omp_reported) then
+            print "(A, I4)", "  True-DF OpenMP team size =", team_threads
+            true_df_omp_reported = .true.
+        end if
+
+        F = Hcore + J_mat - 0.5d0 * K_mat
+        deallocate(J_mat, K_mat)
+    end subroutine build_fock_true_df
 
     ! ================================================================
     ! Release cached DF tensors
@@ -351,7 +610,17 @@ contains
         if (allocated(df_B)) deallocate(df_B)
         df_naux = 0
         df_ready = .false.
+        df_omp_reported = .false.
+        df_block_omp_reported = .false.
     end subroutine clear_df_cache
+
+    subroutine clear_true_df_cache()
+        implicit none
+        if (allocated(true_df_B)) deallocate(true_df_B)
+        true_df_naux = 0
+        true_df_ready = .false.
+        true_df_omp_reported = .false.
+    end subroutine clear_true_df_cache
 
     ! ================================================================
     ! DIIS error: e = FPS - SPF  (return max-norm)
@@ -513,7 +782,7 @@ contains
         real(c_double), allocatable :: C_last(:,:)
         real(c_double) :: E_elec, E_tot, E_prev, err_norm, E_nuc
         integer :: iter, ns, nocc, env_stat, env_len
-        logical :: use_df
+        logical :: use_cholesky, use_block_cholesky, use_true_df
         character(len=32) :: fock_method
 
         allocate(F(nao,nao), P(nao,nao), err(nao,nao), F_extrap(nao,nao))
@@ -526,38 +795,62 @@ contains
         E_prev= huge(1.0d0)
         ns    = 0
         C_last = 0.0d0
-        use_df = .false.
+        use_cholesky = .false.
+        use_block_cholesky = .false.
+        use_true_df = .false.
         fock_method = 'DIRECT'
 
         call get_environment_variable('EXAGRAD_FOCK_BUILDER', fock_method, length=env_len, status=env_stat)
         if (env_stat == 0) then
             fock_method = adjustl(fock_method(1:env_len))
-            if (trim(fock_method) == 'df' .or. trim(fock_method) == 'DF' .or. &
-                trim(fock_method) == 'density_fitting' .or. trim(fock_method) == 'DENSITY_FITTING') then
-                use_df = .true.
+            if (trim(fock_method) == 'cholesky' .or. trim(fock_method) == 'CHOLESKY' .or. &
+                trim(fock_method) == 'df' .or. trim(fock_method) == 'DF') then
+                use_cholesky = .true.
+            else if (trim(fock_method) == 'block_cholesky' .or. trim(fock_method) == 'BLOCK_CHOLESKY' .or. &
+                     trim(fock_method) == 'block_df' .or. trim(fock_method) == 'BLOCK_DF' .or. &
+                     trim(fock_method) == 'df_block' .or. trim(fock_method) == 'DF_BLOCK' .or. &
+                     trim(fock_method) == 'blocked_df' .or. trim(fock_method) == 'BLOCKED_DF') then
+                use_cholesky = .true.
+                use_block_cholesky = .true.
+            else if (trim(fock_method) == 'true_df' .or. trim(fock_method) == 'TRUE_DF' .or. &
+                     trim(fock_method) == 'density_fitting' .or. trim(fock_method) == 'DENSITY_FITTING') then
+                use_true_df = .true.
             end if
         end if
 
         print *, ""
-        if (use_df) then
-            print *, "  ------ RHF SCF (DF-JK) ------"
+        if (use_true_df) then
+            print *, "  ------ RHF SCF (True-DF-JK) ------"
+        else if (use_cholesky .and. use_block_cholesky) then
+            print *, "  ------ RHF SCF (Cholesky-Block-JK) ------"
+        else if (use_cholesky) then
+            print *, "  ------ RHF SCF (Cholesky-JK) ------"
         else
             print *, "  ------ RHF SCF (Direct-JK) ------"
         end if
+        print "(A, I4)", "  OpenMP max threads =", omp_get_max_threads()
         print *, "  E_nuc =", E_nuc, " Ha"
         print "(A5, A20, A18, A12)", "  Iter", "E_total (Ha)", "|dE|", "|FPS-SPF|"
 
-        if (.not. use_df) then
+        if (use_true_df) then
+            call initialize_true_df_factors()
+        else if (.not. use_cholesky) then
             call compute_schwarz(Q)
         else
             call initialize_df_factors()
-            print "(A, I8)", "  DF auxiliary rank =", df_naux
+            print "(A, I8)", "  Cholesky auxiliary rank =", df_naux
         end if
 
         do iter = 1, MAX_ITER
             ! Build Fock from current density
-            if (use_df) then
-                call build_fock_df(P, Hcore, F)
+            if (use_true_df) then
+                call build_fock_true_df(P, Hcore, F)
+            else if (use_cholesky) then
+                if (use_block_cholesky) then
+                    call build_fock_df_block(P, Hcore, F)
+                else
+                    call build_fock_df(P, Hcore, F)
+                end if
             else
                 call build_fock_direct(P, Hcore, Q, F)
             end if
@@ -578,7 +871,8 @@ contains
                 print "(A, F18.10, A)", "  E_total =", E_tot, " Ha"
                 P_in = P
                 if (present(C_out)) C_out = C_last
-                if (use_df) call clear_df_cache()
+                if (use_cholesky) call clear_df_cache()
+                if (use_true_df) call clear_true_df_cache()
                 deallocate(F, P, err, F_extrap, Q, e_orb, C_last, F_hist, P_hist, e_hist)
                 return
             end if
@@ -615,7 +909,8 @@ contains
         print *, "  WARNING: SCF did not converge in", MAX_ITER, "cycles"
         P_in = P
         if (present(C_out)) C_out = C_last
-        if (use_df) call clear_df_cache()
+        if (use_cholesky) call clear_df_cache()
+        if (use_true_df) call clear_true_df_cache()
         deallocate(F, P, err, F_extrap, Q, e_orb, C_last, F_hist, P_hist, e_hist)
     end subroutine run_scf
 
