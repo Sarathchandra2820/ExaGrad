@@ -1,6 +1,7 @@
-FC = gfortran
+FC     = gfortran
 FFLAGS = -O3 -march=native -fopenmp -Wall -ffree-line-length-none -Isrc
 FFLAGS_DBG = -g -fbacktrace -fbounds-check -O0 -Wall -Wextra -fopenmp -ffree-line-length-none -Isrc
+
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
@@ -14,29 +15,78 @@ else
 $(error Unsupported OS '$(UNAME_S)')
 endif
 
-# Linux links against threaded OpenBLAS; macOS uses Accelerate-backed BLAS
 ifeq ($(UNAME_S),Linux)
-LIBS    = $(LIBCINT) $(RPATH) -llapack \
-          -L/usr/lib/x86_64-linux-gnu/openblas-pthread -lopenblas
+LIBS = $(LIBCINT) $(RPATH) -llapack \
+       -L/usr/lib/x86_64-linux-gnu/openblas-pthread -lopenblas
 else
-LIBS    = $(LIBCINT) $(RPATH) -llapack -lblas
+LIBS = $(LIBCINT) $(RPATH) -llapack -lblas
 endif
 
-# Compilation order matters: modules must be compiled before programs that use them
-OBJS = src/libcint_interface.o src/math_utils.o src/integrals_gen.o src/scf.o src/cpks.o src/rhf_main.o
+# ---------------------------------------------------------------------------
+# Object files — compilation order encodes module dependency
+# ---------------------------------------------------------------------------
+OBJS = \
+    src/interfaces/libcint_interface.o \
+    src/interfaces/math_utils.o \
+    src/types/molecule_t.o \
+    src/integrals/one_electron_integrals.o \
+    src/integrals/jk_contraction.o \
+    src/integrals/two_electron_cholesky.o \
+    src/integrals/two_electron_df.o \
+    src/scf/fock_builder.o \
+    src/scf/scf_driver.o \
+    src/properties/cpks.o \
+    src/programs/rhf_main.o
 
 all: rhf_main
 
 rhf_main: $(OBJS)
 	$(FC) $(FFLAGS) -o $@ $^ $(LIBS)
 
-# Explicit dependencies for modules
-src/integrals_gen.o: src/integrals_gen.f90 src/libcint_interface.o src/math_utils.o
-src/math_utils.o:    src/math_utils.f90
-src/scf.o:           src/scf.f90 src/integrals_gen.o src/math_utils.o
-src/cpks.o:          src/cpks.f90 src/libcint_interface.o src/integrals_gen.o src/math_utils.o
-src/rhf_main.o:      src/rhf_main.f90 src/integrals_gen.o src/scf.o src/cpks.o
+# ---------------------------------------------------------------------------
+# Explicit module dependencies
+# ---------------------------------------------------------------------------
+src/interfaces/libcint_interface.o: src/interfaces/libcint_interface.f90
+src/interfaces/math_utils.o:        src/interfaces/math_utils.f90
+src/types/molecule_t.o:             src/types/molecule_t.f90 \
+                                    src/interfaces/libcint_interface.o
+src/integrals/one_electron_integrals.o: src/integrals/one_electron_integrals.f90 \
+                                        src/interfaces/libcint_interface.o \
+                                        src/interfaces/math_utils.o
+src/integrals/jk_contraction.o:     src/integrals/jk_contraction.f90 \
+                                    src/integrals/one_electron_integrals.o \
+                                    src/interfaces/libcint_interface.o \
+                                    src/interfaces/math_utils.o
+src/integrals/two_electron_cholesky.o: src/integrals/two_electron_cholesky.f90 \
+                                       src/integrals/one_electron_integrals.o \
+                                       src/interfaces/libcint_interface.o \
+                                       src/interfaces/math_utils.o
+src/integrals/two_electron_df.o:    src/integrals/two_electron_df.f90 \
+                                    src/integrals/one_electron_integrals.o \
+                                    src/interfaces/libcint_interface.o \
+                                    src/interfaces/math_utils.o
+src/scf/fock_builder.o:             src/scf/fock_builder.f90 \
+                                    src/integrals/jk_contraction.o \
+                                    src/integrals/two_electron_cholesky.o \
+                                    src/integrals/two_electron_df.o \
+                                    src/integrals/one_electron_integrals.o \
+                                    src/types/molecule_t.o
+src/scf/scf_driver.o:               src/scf/scf_driver.f90 \
+                                    src/scf/fock_builder.o \
+                                    src/interfaces/math_utils.o
+src/properties/cpks.o:              src/properties/cpks.f90 \
+                                    src/integrals/jk_contraction.o \
+                                    src/integrals/one_electron_integrals.o \
+                                    src/interfaces/libcint_interface.o \
+                                    src/interfaces/math_utils.o
+src/programs/rhf_main.o:            src/programs/rhf_main.f90 \
+                                    src/scf/fock_builder.o \
+                                    src/scf/scf_driver.o \
+                                    src/properties/cpks.o
 
+# ---------------------------------------------------------------------------
+# Pattern rule: compile .f90 -> .o, emit .mod files into src/
+# ---------------------------------------------------------------------------
 src/%.o: src/%.f90
 	$(FC) $(FFLAGS) -Jsrc -o $@ -c $<
 
@@ -48,8 +98,7 @@ run: rhf_main generate
 	./rhf_main
 
 clean:
-	rm -f src/*.o src/*.mod *.mod *.o rhf_main rhf_direct
+	rm -f src/*.o src/*.mod src/**/*.o src/**/*.mod *.mod *.o rhf_main rhf_direct
 
-# Debug build: make debug
 debug: FFLAGS = $(FFLAGS_DBG)
 debug: clean rhf_main
