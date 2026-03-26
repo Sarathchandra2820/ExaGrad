@@ -1,6 +1,8 @@
 FC = gfortran
-FFLAGS = -O3 -march=native -fopenmp -Wall -ffree-line-length-none -Isrc
-FFLAGS_DBG = -g -fbacktrace -fbounds-check -O0 -Wall -Wextra -fopenmp -ffree-line-length-none -Isrc
+MODDIR = src
+INCLUDES = -I$(MODDIR) -Isrc/types -Isrc/interfaces -Isrc/integrals -Isrc/scf -Isrc/properties
+FFLAGS = -O3 -march=native -fopenmp -Wall -ffree-line-length-none $(INCLUDES)
+FFLAGS_DBG = -g -fbacktrace -fbounds-check -O0 -Wall -Wextra -fopenmp -ffree-line-length-none $(INCLUDES)
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
@@ -23,7 +25,15 @@ LIBS    = $(LIBCINT) $(RPATH) -llapack -lblas
 endif
 
 # Compilation order matters: modules must be compiled before programs that use them
-OBJS = src/libcint_interface.o src/math_utils.o src/integrals_gen.o src/scf.o src/cpks.o src/rhf_main.o
+OBJS = \
+	src/types/molecule_t.o \
+	src/interfaces/libcint_interface.o \
+	src/interfaces/math_utils.o \
+	src/integrals/one_electron_integrals.o \
+	src/scf/fock_builder.o \
+	src/scf/scf_driver.o \
+	src/properties/cpks.o \
+	src/programs/rhf_main.o
 
 all: rhf_main
 
@@ -31,14 +41,22 @@ rhf_main: $(OBJS)
 	$(FC) $(FFLAGS) -o $@ $^ $(LIBS)
 
 # Explicit dependencies for modules
-src/integrals_gen.o: src/integrals_gen.f90 src/libcint_interface.o src/math_utils.o
-src/math_utils.o:    src/math_utils.f90
-src/scf.o:           src/scf.f90 src/integrals_gen.o src/math_utils.o
-src/cpks.o:          src/cpks.f90 src/libcint_interface.o src/integrals_gen.o src/math_utils.o
-src/rhf_main.o:      src/rhf_main.f90 src/integrals_gen.o src/scf.o src/cpks.o
+src/types/molecule_t.o: src/types/molecule_t.f90
+src/interfaces/libcint_interface.o: src/interfaces/libcint_interface.f90
+src/interfaces/math_utils.o: src/interfaces/math_utils.f90
+src/integrals/one_electron_integrals.o: src/integrals/one_electron_integrals.f90 src/types/molecule_t.o src/interfaces/libcint_interface.o src/interfaces/math_utils.o
+src/scf/fock_builder.o: src/scf/fock_builder.f90 src/integrals/one_electron_integrals.o src/interfaces/libcint_interface.o src/interfaces/math_utils.o
+src/scf/scf_driver.o: src/scf/scf_driver.f90 src/integrals/one_electron_integrals.o src/interfaces/math_utils.o src/scf/fock_builder.o
+src/properties/cpks.o: src/properties/cpks.f90 src/interfaces/libcint_interface.o src/integrals/one_electron_integrals.o src/interfaces/math_utils.o
+src/programs/rhf_main.o: src/programs/rhf_main.f90 src/integrals/one_electron_integrals.o src/scf/scf_driver.o src/properties/cpks.o
+
+rhf_direct: src/types/molecule_t.o src/interfaces/libcint_interface.o src/interfaces/math_utils.o src/integrals/one_electron_integrals.o src/programs/rhf_direct.o
+	$(FC) $(FFLAGS) -o $@ $^ $(LIBS)
+
+src/programs/rhf_direct.o: src/programs/rhf_direct.f90 src/types/molecule_t.o src/integrals/one_electron_integrals.o
 
 src/%.o: src/%.f90
-	$(FC) $(FFLAGS) -Jsrc -o $@ -c $<
+	$(FC) $(FFLAGS) -J$(MODDIR) -o $@ -c $<
 
 generate:
 	python python/export_cint_env.py geometry/pyridine.xyz sto-6g
@@ -48,7 +66,8 @@ run: rhf_main generate
 	./rhf_main
 
 clean:
-	rm -f src/*.o src/*.mod *.mod *.o rhf_main rhf_direct
+	find src -type f \( -name '*.o' -o -name '*.mod' \) -delete
+	rm -f *.mod *.o rhf_main rhf_direct
 
 # Debug build: make debug
 debug: FFLAGS = $(FFLAGS_DBG)
