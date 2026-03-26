@@ -1,10 +1,12 @@
 program rhf_main
     use iso_c_binding
     use one_eints
+    use molecule_t, only: molecule
     use scf_module
     use cpks
     implicit none
 
+    type(molecule) :: mol
     real(c_double), allocatable :: S(:,:), Hcore(:,:)
     real(c_double), allocatable :: S_inv_sqrt(:,:), P(:,:)
     real(c_double), allocatable :: C_mo(:,:), dip_ao(:,:,:), dip_mo(:,:,:)
@@ -15,19 +17,19 @@ program rhf_main
     print *, " Fortran Direct RHF SCF powered by libcint"
     print *, "=========================================="
 
-    call init_molecule()
-    call build_hcore_overlap(S, Hcore)
+    call init_molecule(mol)
+    call build_hcore_overlap(mol, S, Hcore)
 
-    allocate(S_inv_sqrt(nao, nao))
-    call build_s_inv(nao, S, S_inv_sqrt)
+    call build_s_inv(S, S_inv_sqrt)
 
-    allocate(P(nao, nao))
-    call build_initial_guess(nao, total_electrons, Hcore, S_inv_sqrt, P)
+    call build_initial_guess(mol, Hcore, S_inv_sqrt, P)
 
-    allocate(C_mo(nao,nao), dip_ao(nao,nao,3), dip_mo(3,nao,nao))
+    allocate(C_mo(int(mol%basis%nao),int(mol%basis%nao)))
+    allocate(dip_ao(int(mol%basis%nao),int(mol%basis%nao),3))
+    allocate(dip_mo(3,int(mol%basis%nao),int(mol%basis%nao)))
 
-    call run_scf(S, Hcore, S_inv_sqrt, P, C_mo)
-    call transform_dipole_integrals(C_mo, dip_ao, dip_mo)
+    call run_scf(mol, S, Hcore, S_inv_sqrt, P, C_mo)
+    call transform_dipole_integrals(mol, C_mo, dip_ao, dip_mo)
 
     do k = 1, 3
         mu_elec(k) = -sum(P * dip_ao(:,:,k))

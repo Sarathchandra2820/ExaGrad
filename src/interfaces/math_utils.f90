@@ -2,7 +2,6 @@ module math_utils
     use iso_c_binding
     implicit none
 
-    ! BLAS and LAPACK interfaces
     interface
         subroutine dgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc) bind(c, name="dgemm_")
             import :: c_double, c_int, c_char
@@ -32,6 +31,23 @@ module math_utils
             real(c_double), intent(inout) :: b(*)
             integer(c_int), intent(out)   :: info
         end subroutine dgesv
+
+        subroutine dpotrf(uplo, n, a, lda, info) bind(c, name="dpotrf_")
+            import :: c_double, c_int, c_char
+            character(kind=c_char), intent(in) :: uplo
+            integer(c_int), intent(in) :: n, lda
+            real(c_double), intent(inout) :: a(*)
+            integer(c_int), intent(out) :: info
+        end subroutine dpotrf
+
+        subroutine dtrsm(side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb) bind(c, name="dtrsm_")
+            import :: c_double, c_int, c_char
+            character(kind=c_char), intent(in) :: side, uplo, transa, diag
+            integer(c_int), intent(in) :: m, n, lda, ldb
+            real(c_double), intent(in) :: alpha
+            real(c_double), intent(in) :: a(*)
+            real(c_double), intent(inout) :: b(*)
+        end subroutine dtrsm
     end interface
 
 contains
