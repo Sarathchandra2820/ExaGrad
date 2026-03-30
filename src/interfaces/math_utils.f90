@@ -3,6 +3,20 @@ module math_utils
     implicit none
 
     interface
+
+        function ddot(n, x, incx, y, incy) bind(c, name="ddot_")
+            import :: c_double, c_int
+            integer(c_int), intent(in) :: n, incx, incy
+            real(c_double), intent(in) :: x(*), y(*)
+            real(c_double) :: ddot
+        end function ddot
+        subroutine daxpy(n, da, dx, incx, dy, incy) bind(c, name="daxpy_")
+            import :: c_double, c_int
+            integer(c_int), intent(in) :: n, incx, incy
+            real(c_double), intent(in) :: da
+            real(c_double), intent(in) :: dx(*)
+            real(c_double), intent(inout) :: dy(*)
+        end subroutine daxpy
         subroutine dgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc) bind(c, name="dgemm_")
             import :: c_double, c_int, c_char
             character(kind=c_char), intent(in) :: transa, transb
