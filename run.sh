@@ -8,10 +8,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # --- defaults ------------------------------------------------
-XYZ="geometry/pyridine.xyz"
-BASIS="sto-3g"
+XYZ="geometry/pyridine_dimer.xyz"
+BASIS="cc-pVDZ"
 METHOD="true_df"
-NTHREADS="$(nproc)"
+if command -v nproc >/dev/null 2>&1; then
+    NTHREADS="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then
+    NTHREADS="$(sysctl -n hw.ncpu)"
+else
+    NTHREADS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+fi
 AUXBASIS="weigend"
 
 # --- parse optional arguments --------------------------------
@@ -22,7 +28,7 @@ usage() {
     echo "  -b BASIS   Basis set name                    (default: $BASIS)"
     echo "  -m METHOD  Fock builder: direct|cholesky|block_cholesky|true_df  (default: $METHOD)"
     echo "  -a AUX     Auxiliary basis for true_df         (default: $AUXBASIS)"
-    echo "  -t N       Number of OpenMP/BLAS threads     (default: nproc = $(nproc))"
+    echo "  -t N       Number of OpenMP/BLAS threads     (default: $NTHREADS)"
     echo "  -c         Clean build (make clean first)"
     echo "  -h         Show this help message"
     exit 0
@@ -71,8 +77,8 @@ echo "==> Generating integrals for $XYZ with basis $BASIS …"
 python3 python/export_cint_env.py "$XYZ" "$BASIS"
 
 if [[ "$METHOD_LC" == "true_df" ]]; then
-    echo "==> Exporting true DF auxiliary data (packed cderi + aux env) …"
-    python3 python/export_df_factors.py "$XYZ" "$BASIS" "$AUXBASIS"
+    echo "==> Exporting true DF metadata (combined env only) …"
+    python3 python/export_df_metadata.py "$XYZ" "$BASIS" "$AUXBASIS"
 fi
 echo ""
 

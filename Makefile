@@ -1,6 +1,7 @@
 FC     = gfortran
 FFLAGS = -O3 -march=native -fopenmp -Wall -ffree-line-length-none -Isrc
 FFLAGS_DBG = -g -fbacktrace -fbounds-check -O0 -Wall -Wextra -fopenmp -ffree-line-length-none -Isrc
+MODDIR = src
 
 UNAME_S := $(shell uname -s)
 
