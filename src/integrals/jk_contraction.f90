@@ -24,7 +24,7 @@ contains
         real(c_double), intent(out)          :: J(nao,nao), K(nao,nao)
         integer,        intent(in), optional :: block_size
 
-        integer :: q, q0, q1, b, nblocks, bs
+        integer :: q, q0, q1, iblk, nblocks, bs
         integer :: tid, nthreads
         real(c_double) :: zq
         real(c_double), allocatable :: T_local(:,:)
@@ -38,14 +38,14 @@ contains
 
             !$omp parallel default(none) &
             !$omp   shared(naux, nao, P, B, nblocks, bs) &
-            !$omp   private(q, q0, q1, b, tid, nthreads, zq, T_local) &
+            !$omp   private(q, q0, q1, iblk, tid, nthreads, zq, T_local) &
             !$omp   reduction(+: J, K)
             allocate(T_local(nao,nao))
             tid      = omp_get_thread_num()
             nthreads = omp_get_num_threads()
-            do b = tid + 1, nblocks, nthreads
-                q0 = (b-1)*bs + 1
-                q1 = min(naux, b*bs)
+            do iblk = tid + 1, nblocks, nthreads
+                q0 = (iblk-1)*bs + 1
+                q1 = min(naux, iblk*bs)
                 do q = q0, q1
                     zq = sum(P * B(:,:,q))
                     J  = J + zq * B(:,:,q)
@@ -64,8 +64,10 @@ contains
             allocate(T_local(nao,nao))
             !$omp do schedule(dynamic)
             do q = 1, naux
-                zq = sum(P * B(:,:,q))
-                J  = J + zq * B(:,:,q)
+                ! zq = sum(P * B(:,:,q))
+                ! J  = J + zq * B(:,:,q)
+                zq = ddot(nao*nao, P, 1, B(1,1,q), 1)
+                call daxpy(nao*nao, zq, B(1,1,q), 1, J, 1)
                 call dgemm('N','N', nao,nao,nao, 1.0d0, B(:,:,q),nao, P,nao, 0.0d0, T_local,nao)
                 call dgemm('N','T', nao,nao,nao, 1.0d0, T_local,nao, B(:,:,q),nao, 1.0d0, K,nao)
             end do
