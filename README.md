@@ -1,6 +1,6 @@
 # ExaGrad
 
-A Fortran electronic structure code for computing excited-state molecular properties using orbital localisation to enable embarrassingly parallel evaluation of response equations.
+A Fortran electronic structure code for computing excited-state molecular properties using orbital localisation to enable parallel evaluation of response equations.
 
 ## Motivation
 
