@@ -1,5 +1,5 @@
 module polarisability_init
-    use math_utils_module
+    use math_utils
     use iso_c_binding
     use davidson_module
     use jk_contraction_module
@@ -8,51 +8,87 @@ module polarisability_init
 
 
 
-    subroutine contract_over_kernel(sigma_ao, B, naux, method, Q)
-        character(len=*), intent(in)  :: method
-        integer, intent(in) :: naux
-        integer :: nao
-        real(c_double), intent(in) :: B(:,:,:)
-        real(c_double), intent(inout) :: sigma_ao(:,:)
-        real(c_double), intent(in), optional :: Q(:,:)
-        real(c_double), allocatable :: J(:,:), K(:,:)
+contains
 
-        nao = size(sigma_ao, 1)
+    subroutine transform_dipole_integrals(mol, C_mo, nocc, dip_ao, dip_mo)
+        implicit none
+        type(molecule), intent(in) :: mol
+        real(c_double), intent(in)  :: C_mo(:,:)
+        integer, intent(in) :: nocc
+        real(c_double), intent(out) :: dip_ao(:,:,:)
+        real(c_double), intent(out) :: dip_mo(:,:,:)
 
-        allocate(J(nao,nao), K(nao,nao))
+        integer :: shI, shJ, di, dj
+        integer :: i, j, k, nbuf, max_ao_per_shell, n, nbas_local
+        integer(c_int) :: stat, shls(2), cdims(2)
+        real(c_double), allocatable :: buf(:), dip_mo_k(:,:)
 
-        select case (trim(method))
-        case ('true_df', 'block_cholesky', 'cholesky')
-            if (naux <= 0) stop 'Error: no auxiliary rank for DF/Cholesky contraction'
-            call contract_jk(B, naux, sigma_ao, J, K)
-            sigma_ao = J - 0.5d0 * K
-        case default
-            if (.not. present(Q)) stop 'Error: Schwarz bounds Q required for direct contraction'
-            call contract_jk_direct(sigma_ao, Q, J, K)
-            sigma_ao = J - K
-        end select
+        call activate_molecule(mol)
+        n = size(C_mo, 1)
+        nbas_local = int(mol%basis%nbas)
 
-        deallocate(J, K)
+        dip_ao = 0.0d0
+        dip_mo = 0.0d0
 
-    end subroutine contract_over_kernel
+        max_ao_per_shell = 0
+        do shI = 1, nbas_local
+            max_ao_per_shell = max(max_ao_per_shell, int(mol%basis%ao_loc(shI+1) - mol%basis%ao_loc(shI)))
+        end do
 
-    subroutine build_sigma(method, sigma_init, C_mo, nocc, B, naux, sigma_out, Q)
-        character(len=*), intent(in)  :: method
-        integer, intent(in) :: nocc, naux
-        real(c_double), intent(in) :: sigma_init(:,:)
-        real(c_double), intent(in) :: C_mo(:,:)
-        real(c_double), intent(in) :: B(:,:,:)
-        real(c_double), allocatable, intent(out) :: sigma_out(:,:)
-        real(c_double), intent(in), optional :: Q(:,:)
+        allocate(buf(3*max_ao_per_shell*max_ao_per_shell))
 
-        real(c_double), allocatable :: sigma_ao(:,:)
+        do shI = 1, nbas_local
+            di = int(mol%basis%ao_loc(shI+1) - mol%basis%ao_loc(shI))
+            do shJ = 1, nbas_local
+                dj = int(mol%basis%ao_loc(shJ+1) - mol%basis%ao_loc(shJ))
 
-        !Here we assume sigma_init is in MO basis, we need to transform it to AO basis, contract over the kernel and then transform back to MO basis
+                buf(1:3*di*dj) = 0.0d0
+                shls  = [int(shI-1,c_int), int(shJ-1,c_int)]
+                cdims = [int(di,c_int), int(dj,c_int)]
 
-        call transform_sigma_mo_ao(sigma_init, C_mo, sigma_ao)
-        call contract_over_kernel(sigma_ao, B, naux, method, Q)
-        call transform_sigma_ao_mo(sigma_ao, C_mo, nocc, sigma_out)
+                stat = cint1e_r_sph(buf, cdims, shls, atm, mol%basis%natm, bas, mol%basis%nbas, &
+                                   env, c_null_ptr, c_null_ptr)
 
-        deallocate(sigma_ao)
+                if (stat /= 0_c_int) then
+                    do k = 1, 3
+                        do j = 1, dj
+                            do i = 1, di
+                                nbuf = ((k-1)*dj + (j-1))*di + i
+                                dip_ao(int(mol%basis%ao_loc(shI))+i-1, int(mol%basis%ao_loc(shJ))+j-1, k) = buf(nbuf)
+                            end do
+                        end do
+                    end do
+                end if
+            end do
+        end do
 
-    end subroutine build_sigma
+        do k = 1, 3
+            call transform_sigma_ao_mo(dip_ao(:,:,k), C_mo, nocc, dip_mo_k)
+            dip_mo(:,:,k) = dip_mo_k
+        end do
+
+        deallocate(buf)
+        if (allocated(dip_mo_k)) deallocate(dip_mo_k)
+    end subroutine transform_dipole_integrals
+
+    subroutine prepare_initial_trial_density(D, U, C_mo)
+        implicit none
+        real(c_double), intent(in)  :: U(:,:,:), C_mo(:,:)
+        real(c_double), intent(out) :: D(:,:,:)
+
+        integer :: k
+        real(c_double), allocatable :: D_k(:,:)
+
+        D = 0.0d0
+        do k = 1, 3
+            call transform_sigma_mo_ao(U(:,:,k), C_mo, D_k)
+            D(:,:,k) = D_k
+        end do
+
+        if (allocated(D_k)) deallocate(D_k)
+    end subroutine prepare_initial_trial_density
+
+    
+
+
+end module polarisability_init
