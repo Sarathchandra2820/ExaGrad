@@ -1,26 +1,58 @@
 # ExaGrad
 
-A Fortran implementation of Restricted Hartree-Fock (RHF) SCF for molecular electronic structure calculations, using [libcint](https://github.com/sunqm/libcint) for integral evaluation.
+A Fortran electronic structure code for computing excited-state molecular properties using orbital localisation to enable embarrassingly parallel evaluation of response equations.
+
+## Motivation
+
+Computing excited-state properties (polarisabilities, optical spectra, gradients) for large molecules is dominated by the cost of solving coupled-perturbed equations (CPKS/CPHF), which require repeated contraction of trial vectors against the two-electron kernel. In the canonical MO basis these contractions are global and scale steeply with system size.
+
+By transforming to a **localised orbital basis**, the response equations decompose into weakly coupled subsystems that can be solved **independently and in parallel**. ExaGrad implements this strategy end-to-end:
+
+1. **Ground-state SCF** with density-fitted or direct integral evaluation
+2. **Orbital localisation** of the converged MO coefficients
+3. **Parallel CPKS** in the local basis, with on-the-fly kernel contraction via density fitting
+4. **Property assembly** from the local response vectors
+
+## Method
+
+The CPKS equations for a perturbation $\lambda$ read:
+
+$$(\varepsilon_a - \varepsilon_i) \, U_{ai}^\lambda + \sum_{bj} A_{ai,bj} \, U_{bj}^\lambda = -h_{ai}^\lambda$$
+
+where $A_{ai,bj}$ is the two-electron kernel coupling virtual-occupied pairs. In the canonical basis, the kernel contraction $\sigma_{ai} = \sum_{bj} A_{ai,bj} \, U_{bj}$ requires a global AO-basis Fock build per trial vector.
+
+In a **localised basis**, the kernel becomes sparse: pairs $(ai)$ and $(bj)$ centred on distant fragments contribute negligibly. This sparsity allows the response equations to be partitioned into independent subsystems, each solved on a separate compute node, with communication only at the final property assembly step.
+
+The sigma-vector build follows three stages:
+
+1. **MO to AO**: $P_{\mu\nu}^\lambda = \sum_{ai} C_{\mu a} \, U_{ai}^\lambda \, C_{\nu i}^T + \text{transpose}$
+2. **Kernel contraction**: $G_{\mu\nu} = (2J[P^\lambda] - K[P^\lambda])_{\mu\nu}$ via density fitting
+3. **AO to MO**: $\sigma_{ai} = \sum_{\mu\nu} C_{\mu a}^T \, G_{\mu\nu} \, C_{\nu i}$
+
+With localisation, steps 1-3 operate on reduced-dimension subblocks, and the DF three-index tensor $B_{\mu\nu}^P$ is screened to local auxiliary functions.
 
 ## Features
 
-- RHF SCF with DIIS convergence acceleration
-- Multiple Fock matrix construction methods:
-  - `direct` — O(N^4) direct integral evaluation
-  - `cholesky` — density-fitting with Cholesky decomposition
-  - `block_cholesky` — blocked Cholesky density-fitting
-  - `true_df` — true density-fitting with auxiliary basis
-- OpenMP parallelization
-- Electronic dipole moment calculation
-- Automatic validation against PySCF reference energies
+- Restricted Hartree-Fock SCF with DIIS and ADIIS convergence acceleration
+- Multiple Fock build backends:
+  - `direct` -- four-index integral evaluation with Schwarz screening
+  - `cholesky` -- density fitting via Cholesky decomposition of the ERI matrix
+  - `block_cholesky` -- blocked Cholesky with improved cache locality
+  - `true_df` -- true density fitting with an auxiliary basis set
+- OpenMP-parallel J/K contraction for both DF and direct paths
+- Shell-pair-driven integral evaluation via [libcint](https://github.com/sunqm/libcint)
+- CPKS response solver with MO-AO-MO transform pipeline
+- Dipole integral evaluation and AO-to-MO transformation for polarisability
+- PySCF-based validation and basis set export utilities
 
 ## Requirements
 
-- gfortran
-- LAPACK/BLAS (Accelerate on macOS, OpenBLAS on Linux)
-- Python 3 with PySCF (for integral generation and validation)
+- gfortran (with OpenMP support)
+- BLAS/LAPACK (Accelerate on macOS, OpenBLAS on Linux)
+- Python 3 with PySCF (for basis set export, integral generation, and validation)
+- libcint (provided via PySCF installation)
 
-## Build
+## Building
 
 ```bash
 make rhf_main
@@ -32,27 +64,25 @@ make rhf_main
 ./run.sh -g geometry/H2O.xyz -b cc-pVTZ -m true_df -a weigend -t 8
 ```
 
-**Options:**
-
 | Flag | Description | Example |
 |------|-------------|---------|
-| `-g` | Geometry file (XYZ) | `geometry/H2O.xyz` |
-| `-b` | Basis set | `cc-pVTZ` |
+| `-g` | Geometry file (XYZ format) | `geometry/H2O.xyz` |
+| `-b` | Orbital basis set | `cc-pVTZ` |
 | `-m` | Fock build method | `direct`, `cholesky`, `block_cholesky`, `true_df` |
-| `-a` | Auxiliary basis (for DF methods) | `weigend` |
+| `-a` | Auxiliary basis set (for DF methods) | `weigend` |
 | `-t` | Number of OpenMP threads | `8` |
 
-## Project Structure
+## Repository Structure
 
 ```
 src/
-├── types/          # Molecule type definition
-├── interfaces/     # libcint C bindings, BLAS/LAPACK wrappers
-├── integrals/      # One-electron integral routines
-├── scf/            # Fock builder and SCF driver
-├── properties/     # Dipole moment integrals
-└── programs/       # Main program entry point
-geometry/           # Molecular geometries (XYZ format)
-ints/               # Generated integral data files
-python/             # PySCF integral export and validation scripts
+  types/           Molecular data structures (molecule, basis context)
+  interfaces/      libcint C bindings, BLAS/LAPACK wrappers, Davidson solver
+  integrals/       One-electron integrals, J/K contraction, density fitting, Cholesky
+  scf/             Fock builder dispatch, SCF driver with DIIS/ADIIS
+  properties/      Polarisability initialisation, CPKS response solver
+  programs/        Main program entry points
+python/            PySCF utilities for basis export, integral generation, validation
+geometry/          Molecular geometries in XYZ format
+ints/              Runtime integral and metadata files (generated by python scripts)
 ```
