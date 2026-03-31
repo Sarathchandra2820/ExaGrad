@@ -34,6 +34,7 @@ OBJS = \
     src/integrals/jk_contraction.o \
     src/integrals/two_electron_cholesky.o \
     src/integrals/two_electron_df.o \
+    src/interfaces/transform_sigma.o \
     src/interfaces/davidson.o \
     src/scf/fock_builder.o \
     src/scf/scf_driver.o \
