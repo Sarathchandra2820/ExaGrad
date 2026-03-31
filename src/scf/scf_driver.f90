@@ -158,12 +158,13 @@ contains
         deallocate(z, A, c, grad, d)
     end subroutine adiis_extrapolate
 
-    subroutine run_scf(mol, S, Hcore, X, P_in, C_out)
+    subroutine run_scf(mol, S, Hcore, X, P_in, C_out, mo_energies)
         implicit none
         type(molecule), intent(in) :: mol
         real(c_double), intent(in)    :: S(:,:), Hcore(:,:), X(:,:)
         real(c_double), intent(inout) :: P_in(:,:)
         real(c_double), intent(out), optional :: C_out(:,:)
+        real(c_double), intent(out), optional :: mo_energies(:)
 
         real(c_double), allocatable :: F(:,:), P(:,:), err(:,:)
         real(c_double), allocatable :: F_hist(:,:,:), P_hist(:,:,:), e_hist(:,:,:)
@@ -222,6 +223,7 @@ contains
                 print '(A, F18.10, A)', '  E_total =', E_tot, ' Ha'
                 P_in = P
                 if (present(C_out)) C_out = C_last
+                if (present(mo_energies)) mo_energies = e_orb
                 call clear_fock_backend(trim(fock_method))
                 deallocate(F, P, err, F_extrap, Q, e_orb, C_last, F_hist, P_hist, e_hist)
                 return
@@ -253,6 +255,7 @@ contains
         print *, '  WARNING: SCF did not converge in', MAX_ITER, 'cycles'
         P_in = P
         if (present(C_out)) C_out = C_last
+        if (present(mo_energies)) mo_energies = e_orb
         call clear_fock_backend(trim(fock_method))
         deallocate(F, P, err, F_extrap, Q, e_orb, C_last, F_hist, P_hist, e_hist)
     end subroutine run_scf
