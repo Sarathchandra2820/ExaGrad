@@ -33,7 +33,7 @@ program rhf_main
     allocate(dip_mo(nvir,nocc,3))
 
     call run_scf(mol, S, Hcore, S_inv_sqrt, P, C_mo, mo_energies)
-    call transform_dipole_integrals(mol, C_mo, nocc, dip_ao, dip_mo)
+    !call transform_dipole_integrals(mol, C_mo, nocc, dip_ao, dip_mo)
 
     print *, 'The occupied MO energies (eV) are:'
     do k = 1, nocc

@@ -4,10 +4,12 @@ FFLAGS_DBG = -g -fbacktrace -fbounds-check -O0 -Wall -Wextra -fopenmp -ffree-lin
 MODDIR = src
 
 UNAME_S := $(shell uname -s)
+PYTHON  ?= python3
+PYSCF_LIBDIR := $(shell $(PYTHON) -c "import os, pyscf; print(os.path.join(os.path.dirname(pyscf.__file__), 'lib', 'deps', 'lib'))" 2>/dev/null)
 
 ifeq ($(UNAME_S),Darwin)
-LIBCINT = /Users/sarath/anaconda3/lib/python3.11/site-packages/pyscf/lib/deps/lib/libcint.6.dylib
-RPATH   = -Wl,-rpath,/Users/sarath/anaconda3/lib/python3.11/site-packages/pyscf/lib/deps/lib
+LIBCINT = $(PYSCF_LIBDIR)/libcint.6.dylib
+RPATH   = -Wl,-rpath,$(PYSCF_LIBDIR)
 else ifeq ($(UNAME_S),Linux)
 LIBCINT = /home/sarath/anaconda3/lib/python3.12/site-packages/pyscf/lib/deps/lib/libcint.so
 RPATH   = -Wl,-rpath,/home/sarath/anaconda3/lib/python3.12/site-packages/pyscf/lib/deps/lib \
