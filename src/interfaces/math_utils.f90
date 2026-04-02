@@ -46,6 +46,36 @@ module math_utils
             integer(c_int), intent(out)   :: info
         end subroutine dgesv
 
+        function dnrm2(n, x, incx) bind(c, name="dnrm2_")
+            import :: c_double, c_int
+            integer(c_int), intent(in) :: n, incx
+            real(c_double), intent(in) :: x(*)
+            real(c_double) :: dnrm2
+        end function dnrm2
+
+        subroutine dscal(n, da, dx, incx) bind(c, name="dscal_")
+            import :: c_double, c_int
+            integer(c_int), intent(in) :: n, incx
+            real(c_double), intent(in) :: da
+            real(c_double), intent(inout) :: dx(*)
+        end subroutine dscal
+
+        subroutine dcopy(n, dx, incx, dy, incy) bind(c, name="dcopy_")
+            import :: c_double, c_int
+            integer(c_int), intent(in) :: n, incx, incy
+            real(c_double), intent(in) :: dx(*)
+            real(c_double), intent(out) :: dy(*)
+        end subroutine dcopy
+
+        subroutine dgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy) bind(c, name="dgemv_")
+            import :: c_double, c_int, c_char
+            character(kind=c_char), intent(in) :: trans
+            integer(c_int), intent(in) :: m, n, lda, incx, incy
+            real(c_double), intent(in) :: alpha, beta
+            real(c_double), intent(in) :: a(*), x(*)
+            real(c_double), intent(inout) :: y(*)
+        end subroutine dgemv
+
         subroutine dpotrf(uplo, n, a, lda, info) bind(c, name="dpotrf_")
             import :: c_double, c_int, c_char
             character(kind=c_char), intent(in) :: uplo
