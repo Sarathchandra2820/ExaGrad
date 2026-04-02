@@ -3,3 +3,10 @@ ints/
 archive/
 .claude/
 
+# Build artifacts
+*.o
+*.mod
+*.dSYM/
+rhf_main
+rhf_direct
+
