@@ -113,5 +113,22 @@ elif [ "$CMP_RC" -ne 0 ]; then
     echo "==> Comparison failed (code $CMP_RC)."
 fi
 
+echo "==> Running PySCF polarizability comparison …"
+set +e
+python3 python/compare_polarizability.py \
+    --xyz "$XYZ" \
+    --basis "$BASIS" \
+    --fortran-method "$METHOD_LC" \
+    --auxbasis "$AUXBASIS" \
+    --fortran-log "$LOG_FILE"
+POL_RC=$?
+set -e
+
+if [ "$POL_RC" -eq 1 ]; then
+    echo "==> Polarizability comparison warning: tensor differs beyond tolerance."
+elif [ "$POL_RC" -ne 0 ]; then
+    echo "==> Polarizability comparison failed (code $POL_RC)."
+fi
+
 rm -f "$LOG_FILE"
 echo "==> Done."

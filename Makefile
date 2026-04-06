@@ -41,6 +41,7 @@ OBJS = \
     src/scf/fock_builder.o \
     src/scf/scf_driver.o \
     src/properties/pol_initialisation.o \
+    src/properties/cpks.o \
     src/programs/rhf_main.o
 
 all: rhf_main
@@ -79,14 +80,23 @@ src/scf/fock_builder.o:             src/scf/fock_builder.f90 \
 src/scf/scf_driver.o:               src/scf/scf_driver.f90 \
                                     src/scf/fock_builder.o \
                                     src/interfaces/math_utils.o
+src/properties/pol_initialisation.o: src/properties/pol_initialisation.f90 \
+                                    src/interfaces/transform_sigma.o \
+                                    src/integrals/jk_contraction.o \
+                                    src/integrals/two_electron_df.o \
+                                    src/interfaces/math_utils.o
 src/properties/cpks.o:              src/properties/cpks.f90 \
+                                    src/interfaces/davidson.o \
+                                    src/interfaces/transform_sigma.o \
+                                    src/integrals/two_electron_df.o \
+                                    src/integrals/two_electron_cholesky.o \
                                     src/integrals/jk_contraction.o \
                                     src/integrals/one_electron_integrals.o \
-                                    src/interfaces/libcint_interface.o \
                                     src/interfaces/math_utils.o
 src/programs/rhf_main.o:            src/programs/rhf_main.f90 \
                                     src/scf/fock_builder.o \
                                     src/scf/scf_driver.o \
+                                    src/properties/pol_initialisation.o \
                                     src/properties/cpks.o
 
 # ---------------------------------------------------------------------------
