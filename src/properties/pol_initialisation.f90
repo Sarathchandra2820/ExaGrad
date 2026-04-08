@@ -1,6 +1,9 @@
 module polarisability_init
     use math_utils
     use iso_c_binding
+    use molecule_t, only: molecule
+    use one_eints, only: activate_molecule
+    use molecule_loader, only: atm, bas, env
     use sigma_build, only: transform_sigma_mo_ao, transform_sigma_ao_mo
     use jk_contraction_module
     use two_electron_df_module, only: true_df_B, true_df_naux

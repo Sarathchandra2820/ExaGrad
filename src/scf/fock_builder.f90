@@ -1,6 +1,6 @@
 module fock_builder_module
     use iso_c_binding
-use one_eints
+    use molecule_loader, only: nbas, nao
     use molecule_t, only: molecule
     use libcint_interface
     use math_utils

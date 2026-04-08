@@ -1,0 +1,17 @@
+With molecular fragments, Approach B (MINAO-based) won't work because MINAO only gives you an atomic minimal basis — it has no knowledge of how electrons are distributed within a molecular fragment. You need actual fragment MO coefficients from separate SCF calculations on each fragment.
+
+So it's Approach A: the full ROSE workflow.
+
+The pipeline becomes:
+
+Define fragments — e.g. pyridine dimer → fragment A (monomer 1) + fragment B (monomer 2)
+SCF on each fragment — get C_frag_A(nao_A, nmo_A), C_frag_B(nao_B, nmo_B) each in their own AO basis
+SCF on the supermolecule — get C_mol(nao_mol, nmo_mol) in the full AO basis
+Cross-overlaps — S21 between fragment AO bases and the supermolecule AO basis (libcint can do this since the fragments use subsets of the same atoms/basis)
+ROSE — MakeIAO_Standard_2013 → Localization → C_FMO
+The key question for implementation: how do you define fragments? Options:
+
+Input file — a simple text file listing which atoms belong to which fragment
+Python side — PySCF builds fragment gto.Mole objects, runs their SCFs, exports C_frag, cross-overlaps, ncore/nval per fragment
+Fortran side — ExaGrad runs fragment SCFs itself (but needs the fragment geometry/basis to be defined somehow)
+Given that ExaGrad already relies on Python for export_cint_env.py, the cleanest path is probably: Python defines fragments, runs fragment SCFs, exports everything. Then Fortran reads the fragment data and calls ROSE.

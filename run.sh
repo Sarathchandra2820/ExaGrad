@@ -11,6 +11,7 @@ cd "$SCRIPT_DIR"
 XYZ="geometry/pyridine_dimer.xyz"
 BASIS="cc-pVDZ"
 METHOD="true_df"
+DATA_DIR="."
 if command -v nproc >/dev/null 2>&1; then
     NTHREADS="$(nproc)"
 elif command -v sysctl >/dev/null 2>&1; then
@@ -22,12 +23,13 @@ AUXBASIS="weigend"
 
 # --- parse optional arguments --------------------------------
 usage() {
-    echo "Usage: $0 [-g geometry.xyz] [-b basis_set] [-m direct|cholesky|block_cholesky|true_df] [-a auxbasis] [-t nthreads] [-c] [-h]"
+    echo "Usage: $0 [-g geometry.xyz] [-b basis_set] [-m direct|cholesky|block_cholesky|true_df] [-a auxbasis] [-d data_dir] [-t nthreads] [-c] [-h]"
     echo ""
     echo "  -g FILE    Path to .xyz geometry file        (default: $XYZ)"
     echo "  -b BASIS   Basis set name                    (default: $BASIS)"
     echo "  -m METHOD  Fock builder: direct|cholesky|block_cholesky|true_df  (default: $METHOD)"
     echo "  -a AUX     Auxiliary basis for true_df         (default: $AUXBASIS)"
+    echo "  -d DIR     Molecule data root directory        (default: $DATA_DIR)"
     echo "  -t N       Number of OpenMP/BLAS threads     (default: $NTHREADS)"
     echo "  -c         Clean build (make clean first)"
     echo "  -h         Show this help message"
@@ -35,12 +37,13 @@ usage() {
 }
 
 CLEAN=false
-while getopts "g:b:m:a:t:ch" opt; do
+while getopts "g:b:m:a:d:t:ch" opt; do
     case $opt in
         g) XYZ="$OPTARG" ;;
         b) BASIS="$OPTARG" ;;
         m) METHOD="$OPTARG" ;;
         a) AUXBASIS="$OPTARG" ;;
+        d) DATA_DIR="$OPTARG" ;;
         t) NTHREADS="$OPTARG" ;;
         c) CLEAN=true ;;
         h) usage ;;
@@ -74,11 +77,12 @@ fi
 
 # --- generate integrals with PySCF / libcint -----------------
 echo "==> Generating integrals for $XYZ with basis $BASIS …"
-python3 python/export_cint_env.py "$XYZ" "$BASIS"
+mkdir -p "$DATA_DIR/ints"
+python3 python/export_cint_env.py "$XYZ" "$BASIS" "$DATA_DIR"
 
 if [[ "$METHOD_LC" == "true_df" ]]; then
     echo "==> Exporting true DF metadata (combined env only) …"
-    python3 python/export_df_metadata.py "$XYZ" "$BASIS" "$AUXBASIS"
+    python3 python/export_df_metadata.py "$XYZ" "$BASIS" "$AUXBASIS" "$DATA_DIR"
 fi
 echo ""
 
@@ -91,9 +95,10 @@ echo ""
 echo "==> Running RHF SCF …"
 echo "  Fock builder : $METHOD_LC"
 echo "  Threads      : $NTHREADS"
+echo "  Data dir     : $DATA_DIR"
 echo "------------------------------------------------------------"
 LOG_FILE="$(mktemp -t exagrad_scf.XXXXXX)"
-EXAGRAD_FOCK_BUILDER="$METHOD_LC" OMP_NUM_THREADS="$NTHREADS" OPENBLAS_NUM_THREADS="$NTHREADS" ./rhf_main | tee "$LOG_FILE"
+EXAGRAD_FOCK_BUILDER="$METHOD_LC" EXAGRAD_MOL_DIR="$DATA_DIR" OMP_NUM_THREADS="$NTHREADS" OPENBLAS_NUM_THREADS="$NTHREADS" ./rhf_main | tee "$LOG_FILE"
 echo "------------------------------------------------------------"
 
 echo "==> Running PySCF reference and comparison …"

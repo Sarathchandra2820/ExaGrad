@@ -1,6 +1,6 @@
 module two_electron_df_module
     use iso_c_binding
-    use one_eints
+    use molecule_loader, only: ensure_molecule_loaded, nbas, nao, active_mol_dir
     use libcint_interface
     use math_utils
     implicit none
@@ -32,11 +32,15 @@ contains
         integer(c_int), allocatable :: atm_all(:), bas_all(:)
         integer, allocatable :: ao_loc_all(:), pair_mu(:), pair_nu(:)
         real(c_double), allocatable :: env_all(:), metric(:,:), rhs(:,:), buf2c(:), buf3c(:)
+        character(len=2048) :: ints_dir
 
         if (true_df_ready) return
+        call ensure_molecule_loaded()
 
-        open(unit=61, file='ints/df_meta_info.txt', status='old', action='read', iostat=ios)
-        if (ios /= 0) stop 'Could not open ints/df_meta_info.txt'
+        ints_dir = trim(active_mol_dir)//'/ints'
+
+        open(unit=61, file=trim(ints_dir)//'/df_meta_info.txt', status='old', action='read', iostat=ios)
+        if (ios /= 0) stop 'Could not open df_meta_info.txt in molecule directory'
         read(61, *, iostat=ios) natm_mol;    if (ios /= 0) stop 'Failed reading natm_mol'
         read(61, *, iostat=ios) nbas_mol;    if (ios /= 0) stop 'Failed reading nbas_mol'
         read(61, *, iostat=ios) natm_aux;    if (ios /= 0) stop 'Failed reading natm_aux'
@@ -56,19 +60,19 @@ contains
 
         allocate(atm_all(natm_all*6), bas_all(nbas_all*8), env_all(env_all_size))
 
-        open(unit=62, file='ints/df_meta_atm.txt', status='old', action='read', iostat=ios)
-        if (ios /= 0) stop 'Could not open ints/df_meta_atm.txt'
-        read(62, *, iostat=ios) atm_all; if (ios /= 0) stop 'Failed reading ints/df_meta_atm.txt'
+        open(unit=62, file=trim(ints_dir)//'/df_meta_atm.txt', status='old', action='read', iostat=ios)
+        if (ios /= 0) stop 'Could not open df_meta_atm.txt in molecule directory'
+        read(62, *, iostat=ios) atm_all; if (ios /= 0) stop 'Failed reading df_meta_atm.txt'
         close(62)
 
-        open(unit=63, file='ints/df_meta_bas.txt', status='old', action='read', iostat=ios)
-        if (ios /= 0) stop 'Could not open ints/df_meta_bas.txt'
-        read(63, *, iostat=ios) bas_all; if (ios /= 0) stop 'Failed reading ints/df_meta_bas.txt'
+        open(unit=63, file=trim(ints_dir)//'/df_meta_bas.txt', status='old', action='read', iostat=ios)
+        if (ios /= 0) stop 'Could not open df_meta_bas.txt in molecule directory'
+        read(63, *, iostat=ios) bas_all; if (ios /= 0) stop 'Failed reading df_meta_bas.txt'
         close(63)
 
-        open(unit=64, file='ints/df_meta_env.txt', status='old', action='read', iostat=ios)
-        if (ios /= 0) stop 'Could not open ints/df_meta_env.txt'
-        read(64, *, iostat=ios) env_all; if (ios /= 0) stop 'Failed reading ints/df_meta_env.txt'
+        open(unit=64, file=trim(ints_dir)//'/df_meta_env.txt', status='old', action='read', iostat=ios)
+        if (ios /= 0) stop 'Could not open df_meta_env.txt in molecule directory'
+        read(64, *, iostat=ios) env_all; if (ios /= 0) stop 'Failed reading df_meta_env.txt'
         close(64)
 
         allocate(ao_loc_all(nbas_all+1))

@@ -1,7 +1,7 @@
 module two_electron_cholesky_module
     use iso_c_binding
     use omp_lib, only: omp_get_max_threads
-    use one_eints
+    use molecule_loader, only: ensure_molecule_loaded, natm, nbas, nao, atm, bas, env, ao_loc
     use libcint_interface
     use math_utils
     implicit none
@@ -35,6 +35,7 @@ contains
         integer, allocatable :: pair_mu(:), pair_nu(:)
 
         if (cholesky_ready) return
+        call ensure_molecule_loaded()
 
         tol      = 1.0d-10
         if (present(chol_tol)) tol = chol_tol

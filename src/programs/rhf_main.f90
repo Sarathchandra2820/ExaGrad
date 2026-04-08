@@ -2,8 +2,10 @@ program rhf_main
     use iso_c_binding
     use one_eints
     use molecule_t,        only: molecule
+    use molecule_loader
     use scf_module
     use fock_builder_module, only: normalize_fock_method
+    use rose_interface_module, only: localize_mo_spaces
     use polarisability_init
     use cpks
     implicit none
@@ -24,8 +26,7 @@ program rhf_main
 
     ! Determine integral backend (same env var as SCF driver)
     fock_method = 'direct'
-    call get_environment_variable('EXAGRAD_FOCK_BUILDER', method_env, &
-                                   length=env_len, status=env_stat)
+    call get_environment_variable('EXAGRAD_FOCK_BUILDER', method_env,length=env_len, status=env_stat)
     if (env_stat == 0) then
         method_env = adjustl(method_env(1:env_len))
         call normalize_fock_method(trim(method_env), fock_method)
@@ -45,6 +46,8 @@ program rhf_main
     allocate(dip_mo(nvir, nocc, 3))
 
     call run_scf(mol, S, Hcore, S_inv_sqrt, P, C_mo, mo_energies)
+
+
 
     ! Dipole integrals in AO and MO basis
     call transform_dipole_integrals(mol, C_mo, nocc, dip_ao, dip_mo)

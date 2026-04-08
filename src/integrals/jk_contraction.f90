@@ -1,7 +1,7 @@
 module jk_contraction_module
     use iso_c_binding
     use omp_lib, only: omp_get_num_threads, omp_get_thread_num
-    use one_eints
+    use molecule_loader, only: ensure_molecule_loaded, natm, nbas, nao, atm, bas, env, ao_loc
     use libcint_interface
     use math_utils
     implicit none
@@ -96,6 +96,7 @@ contains
 
         J = 0.0d0
         K = 0.0d0
+        call ensure_molecule_loaded()
 
         max_ao_per_shell = 0
         do shI = 1, nbas
@@ -184,6 +185,7 @@ contains
         real(c_double), allocatable :: buf(:)
 
         Q = 0.0d0
+        call ensure_molecule_loaded()
         max_ao = maxval(ao_loc(2:nbas+1) - ao_loc(1:nbas))
         allocate(buf(max_ao**4))
         do shI = 1, nbas

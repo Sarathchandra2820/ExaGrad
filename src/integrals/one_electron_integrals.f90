@@ -3,91 +3,19 @@ module one_eints
     use libcint_interface
     use math_utils
     use molecule_t, only: molecule
+    use molecule_loader, only: init_molecule, &
+                               loader_activate_molecule => activate_molecule, &
+                               loader_ensure_molecule_loaded => ensure_molecule_loaded, &
+                               natm, nbas, nao, atm, bas, env, ao_loc
     implicit none
 
-    type(molecule), save :: active_mol
-
-    integer :: natm = 0, nbas = 0, env_size = 0, nao = 0
-    integer :: total_electrons = 0
-    integer(c_int), allocatable :: atm(:), bas(:)
-    real(c_double), allocatable :: env(:)
-    integer, allocatable :: ao_loc(:)
-
 contains
-
-    subroutine init_molecule(mol)
-        implicit none
-        type(molecule), intent(inout), optional :: mol
-        integer :: unit_id, i, l, nctr, nao_shl
-        integer(c_int), allocatable :: atm_raw(:), bas_raw(:)
-
-        open(newunit=unit_id, file='ints/mol_info.txt', status='old')
-        read(unit_id, *) active_mol%basis%natm
-        read(unit_id, *) active_mol%basis%nbas
-        read(unit_id, *) env_size
-        read(unit_id, *) active_mol%basis%nao
-        read(unit_id, *) active_mol%total_electrons
-        close(unit_id)
-
-        active_mol%natoms = int(active_mol%basis%natm)
-
-        if (allocated(atm)) deallocate(atm)
-        if (allocated(bas)) deallocate(bas)
-        if (allocated(env)) deallocate(env)
-        if (allocated(ao_loc)) deallocate(ao_loc)
-
-        if (allocated(active_mol%basis%atm)) deallocate(active_mol%basis%atm)
-        if (allocated(active_mol%basis%bas)) deallocate(active_mol%basis%bas)
-        if (allocated(active_mol%basis%env)) deallocate(active_mol%basis%env)
-        if (allocated(active_mol%basis%ao_loc)) deallocate(active_mol%basis%ao_loc)
-
-        allocate(atm_raw(6 * int(active_mol%basis%natm)))
-        allocate(bas_raw(8 * int(active_mol%basis%nbas)))
-        allocate(active_mol%basis%env(env_size))
-
-        open(newunit=unit_id, file='ints/atm.txt', status='old')
-        read(unit_id, *) atm_raw
-        close(unit_id)
-
-        open(newunit=unit_id, file='ints/bas.txt', status='old')
-        read(unit_id, *) bas_raw
-        close(unit_id)
-
-        open(newunit=unit_id, file='ints/env.txt', status='old')
-        read(unit_id, *) active_mol%basis%env
-        close(unit_id)
-
-        allocate(active_mol%basis%atm(6, int(active_mol%basis%natm)))
-        allocate(active_mol%basis%bas(8, int(active_mol%basis%nbas)))
-        active_mol%basis%atm = reshape(atm_raw, shape(active_mol%basis%atm))
-        active_mol%basis%bas = reshape(bas_raw, shape(active_mol%basis%bas))
-        deallocate(atm_raw, bas_raw)
-
-        allocate(active_mol%basis%ao_loc(int(active_mol%basis%nbas) + 1))
-        active_mol%basis%ao_loc(1) = 1_c_int
-        do i = 1, int(active_mol%basis%nbas)
-            l = int(active_mol%basis%bas(2, i))
-            nctr = int(active_mol%basis%bas(4, i))
-            nao_shl = (2*l + 1) * nctr
-            active_mol%basis%ao_loc(i+1) = active_mol%basis%ao_loc(i) + int(nao_shl, c_int)
-        end do
-
-        call sync_compatibility_views()
-        if (present(mol)) mol = active_mol
-
-        print *, "Molecule initialized:"
-        print *, "  Atoms:       ", active_mol%basis%natm
-        print *, "  Shells:      ", active_mol%basis%nbas
-        print *, "  AO functions:", active_mol%basis%nao
-        print *, "  Electrons:   ", active_mol%total_electrons
-    end subroutine init_molecule
 
     subroutine activate_molecule(mol)
         implicit none
         type(molecule), intent(in) :: mol
 
-        active_mol = mol
-        call sync_compatibility_views()
+        call loader_activate_molecule(mol)
     end subroutine activate_molecule
 
     subroutine build_hcore_overlap(mol, S, Hcore)
@@ -281,47 +209,7 @@ contains
     subroutine ensure_molecule_loaded()
         implicit none
 
-        if (.not. allocated(active_mol%basis%env)) then
-            call init_molecule(active_mol)
-        else if (.not. allocated(atm) .or. .not. allocated(bas) .or. .not. allocated(ao_loc)) then
-            call sync_compatibility_views()
-        end if
+        call loader_ensure_molecule_loaded()
     end subroutine ensure_molecule_loaded
-
-    subroutine sync_compatibility_views()
-        implicit none
-
-        natm = int(active_mol%basis%natm)
-        nbas = int(active_mol%basis%nbas)
-        nao = int(active_mol%basis%nao)
-        total_electrons = active_mol%total_electrons
-        env_size = 0
-        if (allocated(active_mol%basis%env)) env_size = size(active_mol%basis%env)
-
-        if (allocated(atm)) deallocate(atm)
-        if (allocated(bas)) deallocate(bas)
-        if (allocated(env)) deallocate(env)
-        if (allocated(ao_loc)) deallocate(ao_loc)
-
-        if (allocated(active_mol%basis%atm)) then
-            allocate(atm(size(active_mol%basis%atm)))
-            atm = reshape(active_mol%basis%atm, [size(active_mol%basis%atm)])
-        end if
-
-        if (allocated(active_mol%basis%bas)) then
-            allocate(bas(size(active_mol%basis%bas)))
-            bas = reshape(active_mol%basis%bas, [size(active_mol%basis%bas)])
-        end if
-
-        if (allocated(active_mol%basis%env)) then
-            allocate(env(size(active_mol%basis%env)))
-            env = active_mol%basis%env
-        end if
-
-        if (allocated(active_mol%basis%ao_loc)) then
-            allocate(ao_loc(size(active_mol%basis%ao_loc)))
-            ao_loc = int(active_mol%basis%ao_loc)
-        end if
-    end subroutine sync_compatibility_views
 
 end module one_eints

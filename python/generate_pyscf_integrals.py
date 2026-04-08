@@ -1,8 +1,9 @@
 import os
+
 import numpy as np
 from pyscf import gto, scf
 
-def generate_integrals():
+def generate_integrals(root_dir='.'):
     # Define a simple molecule (Water in this case)
     # You can change the atoms and basis set as needed for your specific calculations.
     mol = gto.M(
@@ -39,29 +40,34 @@ def generate_integrals():
     # Write the quantities to text files so Fortran can read them easily.
     # --------------------------------------------------------------------------
     
-    os.makedirs('ints', exist_ok=True)
+    root_dir = os.path.abspath(root_dir)
+    ints_dir = os.path.join(root_dir, 'ints')
+    os.makedirs(ints_dir, exist_ok=True)
     
     # Save the Core Hamiltonian (2D array)
-    np.savetxt('ints/hcore.txt', h_core, fmt='%24.16e')
+    np.savetxt(os.path.join(ints_dir, 'hcore.txt'), h_core, fmt='%24.16e')
     
     # Save the 2-electron integrals.
     # We flatten it to a 1D array to make it easier to read sequentially in Fortran.
     # The original shape is (N_ao, N_ao, N_ao, N_ao).
-    np.savetxt('ints/eri.txt', eri.flatten(), fmt='%24.16e')
+    np.savetxt(os.path.join(ints_dir, 'eri.txt'), eri.flatten(), fmt='%24.16e')
     
     # Save the dipole integrals (all components x, y, z)
     # We flatten it to a 1D array (shape 3 * N_ao * N_ao)
-    np.savetxt('ints/dipole.txt', dipole_ints.flatten(), fmt='%24.16e')
+    np.savetxt(os.path.join(ints_dir, 'dipole.txt'), dipole_ints.flatten(), fmt='%24.16e')
     
     # Save the MO Coefficients (2D array)
-    np.savetxt('ints/mo_coeff.txt', mo_coeff, fmt='%24.16e')
+    np.savetxt(os.path.join(ints_dir, 'mo_coeff.txt'), mo_coeff, fmt='%24.16e')
 
     print("\n--- Integral Generation Complete ---")
-    print("Files written to the 'ints' directory:")
+    print(f"Files written to '{ints_dir}':")
     print("- hcore.txt     (1-electron integrals)")
     print("- eri.txt       (2-electron integrals, flattened)")
     print("- dipole.txt    (dipole integrals, flattened)")
     print("- mo_coeff.txt  (MO coefficient matrix)")
 
 if __name__ == '__main__':
-    generate_integrals()
+    import sys
+
+    output_root = sys.argv[1] if len(sys.argv) > 1 else '.'
+    generate_integrals(output_root)
