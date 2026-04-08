@@ -22,6 +22,15 @@ module molecule_t
         type(basis_context) :: basis
     end type molecule
 
+    type :: fragment_scf_info
+        type(molecule) :: mol
+        real(c_double), allocatable :: S(:,:), C_mo(:,:)
+        real(c_double), allocatable :: mo_energies(:)
+        integer(c_int) :: nocc = 0
+        integer(c_int) :: nvir = 0
+    end type fragment_scf_info
+        
+
 
 
 end module molecule_t
