@@ -6,7 +6,7 @@ import numpy as np
 from pyscf import gto, df
 from pyscf.gto import mole
 
-from export_cint_env import find_fragment_xyz_files
+from export_cint_env import find_fragment_xyz_files, resolve_supersystem_xyz
 
 
 def export_df_metadata(xyz_file: str, basis_name: str, root_dir: str, auxbasis: str = "weigend") -> None:
@@ -66,5 +66,6 @@ if __name__ == "__main__":
     basis = sys.argv[2] if len(sys.argv) > 2 else "sto-3g"
     aux = sys.argv[3] if len(sys.argv) > 3 else "weigend"
     output_root = sys.argv[4] if len(sys.argv) > 4 else "."
+    xyz = resolve_supersystem_xyz(output_root, xyz)
     export_df_metadata(xyz, basis, output_root, aux)
     export_fragment_df_metadata(output_root, basis, aux)

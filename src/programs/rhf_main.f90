@@ -5,7 +5,6 @@ program rhf_main
     use molecule_loader
     use scf_module
     use fock_builder_module, only: normalize_fock_method
-    use rose_interface_module, only: localize_mo_spaces
     use polarisability_init
     use cpks
     implicit none

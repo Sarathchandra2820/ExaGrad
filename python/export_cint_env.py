@@ -5,6 +5,35 @@ import numpy as np
 from pyscf import gto
 
 
+def resolve_supersystem_xyz(root_dir, xyz_file):
+    root_dir = os.path.abspath(root_dir)
+    supra_xyz = os.path.join(root_dir, 'supra_mol.xyz')
+    if os.path.isfile(supra_xyz):
+        return supra_xyz
+    return xyz_file
+
+
+def find_fragment_xyz(fragment_dir):
+    fragment_dir = os.path.abspath(fragment_dir)
+    fragment_name = os.path.basename(fragment_dir)
+    preferred_xyz = os.path.join(fragment_dir, f'{fragment_name}.xyz')
+    if os.path.isfile(preferred_xyz):
+        return preferred_xyz
+
+    xyz_candidates = sorted(
+        os.path.join(fragment_dir, entry)
+        for entry in os.listdir(fragment_dir)
+        if entry.lower().endswith('.xyz')
+    )
+    if len(xyz_candidates) == 1:
+        return xyz_candidates[0]
+    if len(xyz_candidates) > 1:
+        raise ValueError(
+            f"Multiple XYZ files found in {fragment_dir}. Expected one or {fragment_name}.xyz"
+        )
+    return None
+
+
 def prepare_output_dirs(root_dir):
     root_dir = os.path.abspath(root_dir)
     ints_dir = os.path.join(root_dir, 'ints')
@@ -18,13 +47,14 @@ def find_fragment_xyz_files(root_dir):
 
     for entry in sorted(os.listdir(root_dir)):
         entry_path = os.path.join(root_dir, entry)
-        if not os.path.isfile(entry_path):
+        if entry.lower().startswith('frag_') and os.path.isdir(entry_path):
+            fragment_xyz = find_fragment_xyz(entry_path)
+            if fragment_xyz is not None:
+                fragment_xyz_files.append(fragment_xyz)
             continue
-        if not entry.lower().endswith('.xyz'):
-            continue
-        if not entry.lower().startswith('frag_'):
-            continue
-        fragment_xyz_files.append(entry_path)
+
+        if os.path.isfile(entry_path) and entry.lower().endswith('.xyz') and entry.lower().startswith('frag_'):
+            fragment_xyz_files.append(entry_path)
 
     return fragment_xyz_files
 
@@ -134,6 +164,7 @@ if __name__ == '__main__':
     xyz = sys.argv[1] if len(sys.argv) > 1 else 'geometry/H2O.xyz'
     basis = sys.argv[2] if len(sys.argv) > 2 else 'sto-3g'
     output_root = sys.argv[3] if len(sys.argv) > 3 else '.'
+    xyz = resolve_supersystem_xyz(output_root, xyz)
 
     export_cint_data(xyz, basis, output_root)
     frag_dirs = export_fragment_int_dirs(output_root, basis)

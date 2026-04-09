@@ -33,7 +33,6 @@ ROSE_DIR = src/interfaces/rose_interface
 COMMON_OBJS = \
     src/interfaces/libcint_interface.o \
     src/interfaces/math_utils.o \
-    $(ROSE_DIR)/rose_interface.o \
     src/types/molecule_t.o \
     src/types/molecule_loader.o \
     src/integrals/one_electron_integrals.o \
@@ -47,8 +46,18 @@ COMMON_OBJS = \
     src/properties/pol_initialisation.o \
     src/properties/cpks.o
 
+ROSE_LIB_OBJS = \
+    $(ROSE_DIR)/rose_global.o \
+    $(ROSE_DIR)/linear_algebra.o \
+    $(ROSE_DIR)/rose_utils_stub.o \
+    $(ROSE_DIR)/rose_check_stub.o \
+    $(ROSE_DIR)/rose_properties_stub.o \
+    $(ROSE_DIR)/make_iao.o \
+    $(ROSE_DIR)/make_ibo.o \
+    $(ROSE_DIR)/rose_interface.o
+
 OBJS = $(COMMON_OBJS) src/programs/rhf_main.o
-ROSE_OBJS = $(COMMON_OBJS) src/programs/main_rose.o
+ROSE_OBJS = $(COMMON_OBJS) $(ROSE_LIB_OBJS) src/programs/main_rose.o
 
 all: rhf_main
 
@@ -63,7 +72,24 @@ rhf_rose_main: $(ROSE_OBJS)
 # ---------------------------------------------------------------------------
 src/interfaces/libcint_interface.o: src/interfaces/libcint_interface.f90
 src/interfaces/math_utils.o:        src/interfaces/math_utils.f90
-$(ROSE_DIR)/rose_interface.o:       $(ROSE_DIR)/rose_interface.f90
+$(ROSE_DIR)/rose_global.o:          $(ROSE_DIR)/rose_global.F90
+$(ROSE_DIR)/linear_algebra.o:       $(ROSE_DIR)/linear_algebra.F90 \
+                                    $(ROSE_DIR)/rose_global.o
+$(ROSE_DIR)/rose_utils_stub.o:      $(ROSE_DIR)/rose_utils_stub.F90 \
+                                    $(ROSE_DIR)/rose_global.o
+$(ROSE_DIR)/rose_check_stub.o:      $(ROSE_DIR)/rose_check_stub.F90
+$(ROSE_DIR)/rose_properties_stub.o: $(ROSE_DIR)/rose_properties_stub.F90 \
+                                    $(ROSE_DIR)/rose_global.o
+$(ROSE_DIR)/make_iao.o:             $(ROSE_DIR)/make_iao.F90 \
+                                    $(ROSE_DIR)/linear_algebra.o \
+                                    $(ROSE_DIR)/rose_utils_stub.o
+$(ROSE_DIR)/make_ibo.o:             $(ROSE_DIR)/make_ibo.F90 \
+                                    $(ROSE_DIR)/linear_algebra.o \
+                                    $(ROSE_DIR)/rose_utils_stub.o \
+                                    $(ROSE_DIR)/rose_check_stub.o \
+                                    $(ROSE_DIR)/rose_properties_stub.o
+$(ROSE_DIR)/rose_interface.o:       $(ROSE_DIR)/rose_interface.f90 \
+                                    $(ROSE_DIR)/make_ibo.o
 src/types/molecule_t.o:             src/types/molecule_t.f90 \
                                     src/interfaces/libcint_interface.o
 src/types/molecule_loader.o:        src/types/molecule_loader.f90 \
