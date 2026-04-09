@@ -22,6 +22,7 @@ module molecule_loader
         character(len=1024) :: resolved_dir
 
         call resolve_molecule_dir(resolved_dir, dir)
+        active_mol_dir = trim(resolved_dir)
         call read_molecule_from_dir(mol, trim(resolved_dir))
     end subroutine init_molecule
 

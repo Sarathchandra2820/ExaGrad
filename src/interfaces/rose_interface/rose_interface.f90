@@ -5,7 +5,7 @@ module rose_interface_module
     use molecule_loader,     only: init_molecule, activate_molecule
     use one_eints,           only: build_hcore_overlap, build_s_inv, build_initial_guess
     use scf_module,          only: run_scf
-    use fock_builder_module,  only: normalize_fock_method
+    use make_iao,            only: MakeIAO_Simple_2013
     use make_ibo,            only: Localization, sort_on_fragments
 
     implicit none
@@ -23,8 +23,6 @@ contains
         real(c_double), allocatable :: C_mo_frag(:,:), mo_energies_frag(:)
         real(c_double), allocatable :: S_inv_sqrt_frag(:,:), P_frag(:,:), Hcore_frag(:,:),S_frag(:,:)
         integer :: nao_frag, nocc_frag, nvir_frag, nao_sm, nocc_sm, nvir_sm, k
-        character(len=64) :: method_env
-        character(len=32) :: fock_method
         integer :: env_len, env_stat, unit_id, ios
         character(len=1024) :: frag_dir_name
         character(len=2048) :: frag_path
@@ -60,7 +58,7 @@ contains
 
 
         call init_molecule(mol_frag(0), trim(resolved_mol_dir))
-        call activate_molecule(mol_frag(0), trim(resolved_mol_dir))
+        call activate_molecule(mol_frag(0))
         frag_scf_info(0)%mol = mol_frag(0)
 
         call build_hcore_overlap(mol_frag(0), S_frag, Hcore_frag)
@@ -99,7 +97,7 @@ contains
             print *, '------------------------------------------------------------'
 
             call init_molecule(mol_frag(k), trim(frag_path))
-            call activate_molecule(mol_frag(k), trim(frag_path))
+            call activate_molecule(mol_frag(k))
 
             frag_scf_info(k)%mol = mol_frag(k)
             
@@ -122,7 +120,7 @@ contains
             call run_scf(mol_frag(k), S_frag, Hcore_frag, S_inv_sqrt_frag, &
                         P_frag, C_mo_frag, mo_energies_frag)
 
-            print '(A,I0,A,F20.10)', ' Fragment ', k, ' converged.'
+            print '(A,I0,A)', ' Fragment ', k, ' converged.'
             print *, ''
             frag_scf_info(k)%C_mo = C_mo_frag(:,:)
             frag_scf_info(k)%mo_energies = mo_energies_frag(:)
@@ -221,6 +219,100 @@ contains
         
     end subroutine build_ao_map
 
+    subroutine build_embedded_fragment_space(frag_scf_info, nfrags, occupied_space, nmo_frag, P12, label)
+        implicit none
+        type(fragment_scf_info), intent(in) :: frag_scf_info(0:)
+        integer, intent(in) :: nfrags
+        logical, intent(in) :: occupied_space
+        integer, allocatable, intent(out) :: nmo_frag(:)
+        real(c_double), allocatable, intent(out) :: P12(:,:)
+        character(len=*), intent(in) :: label
+
+        integer, allocatable :: ao_map(:)
+        integer :: k, i, nao_sm, nao_frag, nocc_k, nact_k, total_fragment_functions, offset, col_start
+
+        nao_sm = size(frag_scf_info(0)%C_mo, 1)
+        total_fragment_functions = 0
+        allocate(nmo_frag(nfrags))
+
+        do k = 1, nfrags
+            nocc_k = int(frag_scf_info(k)%nocc)
+            if (occupied_space) then
+                nact_k = nocc_k
+            else
+                nact_k = int(frag_scf_info(k)%nvir)
+            end if
+            nmo_frag(k) = nact_k
+            total_fragment_functions = total_fragment_functions + nact_k
+        end do
+
+        allocate(P12(nao_sm, total_fragment_functions))
+        P12 = 0.0d0
+
+        offset = 0
+        do k = 1, nfrags
+            nao_frag = size(frag_scf_info(k)%C_mo, 1)
+            nocc_k = int(frag_scf_info(k)%nocc)
+            nact_k = nmo_frag(k)
+            if (nact_k == 0) cycle
+            if (occupied_space) then
+                col_start = 1
+            else
+                col_start = nocc_k + 1
+            end if
+
+            call build_ao_map(frag_scf_info(0)%mol, frag_scf_info(k)%mol, ao_map)
+            do i = 1, nao_frag
+                P12(ao_map(i), offset+1:offset+nact_k) = &
+                    frag_scf_info(k)%C_mo(i, col_start:col_start+nact_k-1)
+            end do
+
+            print '(A,I0,A,I0,A)', '  Fragment ', k, ': ', nact_k, ' ', trim(label)
+            offset = offset + nact_k
+            deallocate(ao_map)
+        end do
+    end subroutine build_embedded_fragment_space
+
+    subroutine build_iao_coefficients(C_block, S11, P12, CMO_IAO)
+        implicit none
+        real(c_double), intent(in) :: C_block(:,:), S11(:,:), P12(:,:)
+        real(c_double), allocatable, intent(out) :: CMO_IAO(:,:,:)
+
+        real(c_double), allocatable :: A(:,:,:), C3(:,:,:), S11_3(:,:,:)
+        real(c_double), allocatable :: S12(:,:), S21(:,:), S22(:,:)
+        real(c_double), allocatable :: S12_3(:,:,:), S21_3(:,:,:), S22_3(:,:,:), P12_3(:,:,:)
+        real(c_double), allocatable :: temp(:,:)
+        integer :: nao_sm, nref, nact
+
+        nao_sm = size(S11, 1)
+        nref = size(P12, 2)
+        nact = size(C_block, 2)
+
+        allocate(S12(nao_sm, nref), S21(nref, nao_sm), S22(nref, nref))
+        call dgemm('N', 'N', nao_sm, nref, nao_sm, 1.0d0, S11, nao_sm, P12, nao_sm, 0.0d0, S12, nao_sm)
+        call dgemm('T', 'N', nref, nao_sm, nao_sm, 1.0d0, P12, nao_sm, S11, nao_sm, 0.0d0, S21, nref)
+        call dgemm('N', 'N', nref, nref, nao_sm, 1.0d0, S21, nref, P12, nao_sm, 0.0d0, S22, nref)
+
+        allocate(A(nao_sm, nref, 1), C3(nao_sm, nact, 1), S11_3(nao_sm, nao_sm, 1))
+        allocate(S12_3(nao_sm, nref, 1), S21_3(nref, nao_sm, 1), S22_3(nref, nref, 1), P12_3(nao_sm, nref, 1))
+
+        C3(:,:,1) = C_block
+        S11_3(:,:,1) = S11
+        S12_3(:,:,1) = S12
+        S21_3(:,:,1) = S21
+        S22_3(:,:,1) = S22
+        P12_3(:,:,1) = P12
+
+        call MakeIAO_Simple_2013(A, C3, S11_3, S12_3, S21_3, S22_3, P12_3)
+
+        allocate(temp(nao_sm, nact))
+        allocate(CMO_IAO(nref, nact, 1))
+        call dgemm('N', 'N', nao_sm, nact, nao_sm, 1.0d0, S11, nao_sm, C_block, nao_sm, 0.0d0, temp, nao_sm)
+        call dgemm('T', 'N', nref, nact, nao_sm, 1.0d0, A(:,:,1), nao_sm, temp, nao_sm, 0.0d0, CMO_IAO(:,:,1), nref)
+
+        deallocate(A, C3, S11_3, S12, S21, S22, S12_3, S21_3, S22_3, P12_3, temp)
+    end subroutine build_iao_coefficients
+
     ! ================================================================
     ! run_rose_localization: fragment-based Pipek-Mezey localization
     !
@@ -232,27 +324,17 @@ contains
         implicit none
         type(fragment_scf_info), intent(in) :: frag_scf_info(0:)
         integer, intent(in) :: nfrags
-        real(c_double), intent(out) :: lmo_occ(:,:), lmo_vir(:,:)
+        real(c_double), allocatable, intent(out) :: lmo_occ(:,:), lmo_vir(:,:)
 
-        
         real(c_double), allocatable :: CMO_frag(:,:,:), LMO_frag(:,:,:)
-        real(c_double), allocatable :: S12(:,:), temp(:,:), coupling(:,:)
-        integer, allocatable :: nmo_frag(:), ao_map(:), nlo_frag(:)
+        real(c_double), allocatable :: P12(:,:)
+        integer, allocatable :: nmo_frag(:), nlo_frag(:)
         real(c_double), allocatable :: frag_bias(:)
-        integer :: k, nao_sm, nocc_sm, nvir_sm, nao_frag, nocc_k, nvir_k
-        integer :: total_frag_occ, total_frag_vir, offset, i
+        integer :: k, nao_sm, nocc_sm, nvir_sm
 
         nao_sm  = size(frag_scf_info(0)%C_mo, 1)
         nocc_sm = int(frag_scf_info(0)%nocc)
         nvir_sm = int(frag_scf_info(0)%nvir)
-
-        ! Count total fragment occupied and virtual MOs
-        total_frag_occ = 0
-        total_frag_vir = 0
-        do k = 1, nfrags
-            total_frag_occ = total_frag_occ + int(frag_scf_info(k)%nocc)
-            total_frag_vir = total_frag_vir + int(frag_scf_info(k)%nvir)
-        end do
 
         print *, ''
         print *, '=========================================='
@@ -265,49 +347,11 @@ contains
         print *, ''
         print *, '--- Occupied space ---'
         print '(A,I0)', '  Supersystem occupied MOs : ', nocc_sm
-        print '(A,I0)', '  Total fragment occ MOs   : ', total_frag_occ
+        call build_embedded_fragment_space(frag_scf_info, nfrags, .true., nmo_frag, P12, 'occ reference functions')
+        print '(A,I0)', '  Total fragment occ refs  : ', size(P12, 2)
 
-        allocate(CMO_frag(total_frag_occ, nocc_sm, 1))
-        allocate(LMO_frag(total_frag_occ, nocc_sm, 1))
-        allocate(lmo_occ(nocc_sm, nocc_sm))
-        allocate(nmo_frag(nfrags))
-        CMO_frag = 0.0d0
-
-        offset = 0
-        do k = 1, nfrags
-            nao_frag = size(frag_scf_info(k)%C_mo, 1)
-            nocc_k   = int(frag_scf_info(k)%nocc)
-            nmo_frag(k) = nocc_k
-
-            call build_ao_map(frag_scf_info(0)%mol, frag_scf_info(k)%mol, ao_map)
-
-            ! S12 = S_sm(ao_map(:), :)   (nao_frag x nao_sm)
-            allocate(S12(nao_frag, nao_sm))
-            do i = 1, nao_frag
-                S12(i, :) = frag_scf_info(0)%S(ao_map(i), :)
-            end do
-
-            ! temp = S12 @ C_sm_occ   (nao_frag x nocc_sm)
-            allocate(temp(nao_frag, nocc_sm))
-            call dgemm('N', 'N', nao_frag, nocc_sm, nao_sm, 1.0d0, &
-                       S12, nao_frag, &
-                       frag_scf_info(0)%C_mo, nao_sm, &
-                       0.0d0, temp, nao_frag)
-
-            ! coupling = C_frag_occ^T @ temp   (nocc_k x nocc_sm)
-            allocate(coupling(nocc_k, nocc_sm))
-            call dgemm('T', 'N', nocc_k, nocc_sm, nao_frag, 1.0d0, &
-                       frag_scf_info(k)%C_mo, nao_frag, &
-                       temp, nao_frag, &
-                       0.0d0, coupling, nocc_k)
-
-            CMO_frag(offset+1:offset+nocc_k, :, 1) = coupling(:, :)
-
-            print '(A,I0,A,I0,A)', '  Fragment ', k, ': ', nocc_k, ' occ MOs'
-
-            offset = offset + nocc_k
-            deallocate(ao_map, S12, temp, coupling)
-        end do
+        call build_iao_coefficients(frag_scf_info(0)%C_mo(:, 1:nocc_sm), frag_scf_info(0)%S, P12, CMO_frag)
+        allocate(LMO_frag(size(CMO_frag, 1), size(CMO_frag, 2), 1))
 
         call Localization(CMO_frag, LMO_frag, nmo_frag, 2)
 
@@ -323,9 +367,10 @@ contains
         end do
         call print_orbital_populations(CMO_frag, LMO_frag, nmo_frag, nfrags, 'OCC')
 
+        allocate(lmo_occ(size(LMO_frag, 1), size(LMO_frag, 2)))
         lmo_occ = LMO_frag(:,:,1)
 
-        deallocate(CMO_frag, LMO_frag, nmo_frag, nlo_frag, frag_bias)
+        deallocate(CMO_frag, LMO_frag, nmo_frag, nlo_frag, frag_bias, P12)
 
         ! ==================================================================
         !  VIRTUAL LOCALIZATION
@@ -333,54 +378,11 @@ contains
         print *, ''
         print *, '--- Virtual space ---'
         print '(A,I0)', '  Supersystem virtual MOs  : ', nvir_sm
-        print '(A,I0)', '  Total fragment vir MOs   : ', total_frag_vir
+        call build_embedded_fragment_space(frag_scf_info, nfrags, .false., nmo_frag, P12, 'vir reference functions')
+        print '(A,I0)', '  Total fragment vir refs  : ', size(P12, 2)
 
-        allocate(CMO_frag(total_frag_vir, nvir_sm, 1))
-        allocate(LMO_frag(total_frag_vir, nvir_sm, 1))
-        allocate(lmo_vir(nvir_sm, nvir_sm))
-        allocate(nmo_frag(nfrags))
-        CMO_frag = 0.0d0
-
-        offset = 0
-        do k = 1, nfrags
-            nao_frag = size(frag_scf_info(k)%C_mo, 1)
-            nocc_k   = int(frag_scf_info(k)%nocc)
-            nvir_k   = int(frag_scf_info(k)%nvir)
-            nmo_frag(k) = nvir_k
-
-            call build_ao_map(frag_scf_info(0)%mol, frag_scf_info(k)%mol, ao_map)
-
-            ! S12 = S_sm(ao_map(:), :)   (nao_frag x nao_sm)
-            allocate(S12(nao_frag, nao_sm))
-            do i = 1, nao_frag
-                S12(i, :) = frag_scf_info(0)%S(ao_map(i), :)
-            end do
-
-            ! temp = S12 @ C_sm_vir   (nao_frag x nvir_sm)
-            ! C_sm_vir starts at column nocc_sm+1
-            allocate(temp(nao_frag, nvir_sm))
-            call dgemm('N', 'N', nao_frag, nvir_sm, nao_sm, 1.0d0, &
-                       S12, nao_frag, &
-                       frag_scf_info(0)%C_mo(1, nocc_sm+1), nao_sm, &
-                       0.0d0, temp, nao_frag)
-
-            ! coupling = C_frag_vir^T @ temp   (nvir_k x nvir_sm)
-            ! C_frag_vir starts at column nocc_k+1
-            allocate(coupling(nvir_k, nvir_sm))
-            call dgemm('T', 'N', nvir_k, nvir_sm, nao_frag, 1.0d0, &
-                       frag_scf_info(k)%C_mo(1, nocc_k+1), nao_frag, &
-                       temp, nao_frag, &
-                       0.0d0, coupling, nvir_k)
-
-            CMO_frag(offset+1:offset+nvir_k, :, 1) = coupling(:, :)
-
-            print '(A,I0,A,I0,A)', '  Fragment ', k, ': ', nvir_k, ' vir MOs'
-
-            offset = offset + nvir_k
-
-            lmo_vir = LMO_frag(:,:,1)
-            deallocate(ao_map, S12, temp, coupling)
-        end do
+        call build_iao_coefficients(frag_scf_info(0)%C_mo(:, nocc_sm+1:nocc_sm+nvir_sm), frag_scf_info(0)%S, P12, CMO_frag)
+        allocate(LMO_frag(size(CMO_frag, 1), size(CMO_frag, 2), 1))
 
         call Localization(CMO_frag, LMO_frag, nmo_frag, 2)
 
@@ -396,7 +398,10 @@ contains
         end do
         call print_orbital_populations(CMO_frag, LMO_frag, nmo_frag, nfrags, 'VIR')
 
-        deallocate(CMO_frag, LMO_frag, nmo_frag, nlo_frag, frag_bias)
+        allocate(lmo_vir(size(LMO_frag, 1), size(LMO_frag, 2)))
+        lmo_vir = LMO_frag(:,:,1)
+
+        deallocate(CMO_frag, LMO_frag, nmo_frag, nlo_frag, frag_bias, P12)
     end subroutine run_rose_localization
 
     ! ================================================================

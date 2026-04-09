@@ -89,6 +89,7 @@ $(ROSE_DIR)/make_ibo.o:             $(ROSE_DIR)/make_ibo.F90 \
                                     $(ROSE_DIR)/rose_check_stub.o \
                                     $(ROSE_DIR)/rose_properties_stub.o
 $(ROSE_DIR)/rose_interface.o:       $(ROSE_DIR)/rose_interface.f90 \
+                                    $(ROSE_DIR)/make_iao.o \
                                     $(ROSE_DIR)/make_ibo.o
 src/types/molecule_t.o:             src/types/molecule_t.f90 \
                                     src/interfaces/libcint_interface.o
