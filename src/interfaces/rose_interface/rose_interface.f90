@@ -217,6 +217,8 @@ contains
         end do
 
         deallocate(atom_map, shell_count_sm)
+
+        
     end subroutine build_ao_map
 
     ! ================================================================
