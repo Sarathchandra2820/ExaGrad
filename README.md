@@ -72,6 +72,18 @@ make rhf_main
 | `-a` | Auxiliary basis set (for DF methods) | `weigend` |
 | `-t` | Number of OpenMP threads | `8` |
 
+For the ROSE localization driver you can also control post-localization orbital ordering:
+
+```bash
+./run_rose.sh -d geometry/pyridine_rose -m true_df -o fragment_recanon
+```
+
+| ROSE flag | Description |
+|-----------|-------------|
+| `-o fragment` | Keep the current fragment-block ordering after localization |
+| `-o fragment_recanon` | Recanonicalize within each fragment block |
+| `-o energy` | Recanonicalize within fragments, then globally sort LMOs by semicanonical energy |
+
 ## Repository Structure
 
 ```

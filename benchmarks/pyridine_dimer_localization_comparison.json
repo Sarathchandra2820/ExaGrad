@@ -1,0 +1,25 @@
+{
+  "exagrad": {
+    "real_s": 13.14,
+    "E_total_Ha": [
+      -493.4224921294,
+      -246.7117018976,
+      -246.7117018976
+    ],
+    "nocc_localized": 42,
+    "nvir_localized": 176,
+    "min_dominant_fragment_population_virtual": 0.999694
+  },
+  "rose_master": {
+    "real_s": 69.71,
+    "Hartree_Fock_energies_Ha": [
+      -493.4288473698605,
+      -246.71487182002494,
+      -246.71487182002494
+    ],
+    "nmo1": 218,
+    "ncore": 12,
+    "nocc_localized": 30,
+    "nmo2_ref": 58
+  }
+}

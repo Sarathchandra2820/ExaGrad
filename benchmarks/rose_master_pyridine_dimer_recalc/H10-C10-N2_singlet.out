@@ -1,0 +1,346 @@
+#INFO: **** input file is /Users/sarath/Documents/Research/ExaGrad/benchmarks/pyscf_full_pipeline_timing.py ****
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+
+def parse_xyz(xyz_path: Path) -> list[tuple[str, tuple[float, float, float]]]:
+    lines = xyz_path.read_text(encoding="utf-8").strip().splitlines()
+    natoms = int(lines[0].strip())
+    atom_lines = lines[2:2 + natoms]
+    atoms: list[tuple[str, tuple[float, float, float]]] = []
+    for line in atom_lines:
+        parts = line.split()
+        atoms.append((parts[0], (float(parts[1]), float(parts[2]), float(parts[3]))))
+    return atoms
+
+
+def split_fragments(atoms: list[tuple[str, tuple[float, float, float]]], nfrags: int, natoms_per_frag: int | None) -> list[list[tuple[str, tuple[float, float, float]]]]:
+    if natoms_per_frag is None:
+        if len(atoms) % nfrags != 0:
+            raise ValueError("Cannot split atoms evenly; provide --natoms-per-frag")
+        natoms_per_frag = len(atoms) // nfrags
+    if natoms_per_frag * nfrags > len(atoms):
+        raise ValueError("Requested fragments exceed total atoms")
+
+    fragments: list[list[tuple[str, tuple[float, float, float]]]] = []
+    for idx in range(nfrags):
+        start = idx * natoms_per_frag
+        end = start + natoms_per_frag
+        fragments.append(atoms[start:end])
+    return fragments
+
+
+def write_input_genibo(path: Path, nfrags: int, version: str, charge: int, exponent: int) -> None:
+    content = (
+        "**ROSE\n"
+        ".VERSION\n"
+        f"{version}\n"
+        ".CHARGE\n"
+        f"{charge}\n"
+        ".EXPONENT\n"
+        f"{exponent}\n"
+        ".FILE_FORMAT\n"
+        "h5\n"
+        ".NFRAGMENTS\n"
+        f"{nfrags}\n"
+        "*END OF INPUT\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def format_seconds(seconds: float) -> str:
+    return f"{seconds:9.3f} s"
+
+
+def move_if_exists(src: Path, dst: Path) -> None:
+    if src.exists():
+        if dst.exists():
+            dst.unlink()
+        shutil.move(str(src), str(dst))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Full PySCF+ROSE pipeline timing with phase-by-phase wall-clock breakdown.")
+    parser.add_argument("--xyz", default="/Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer.xyz", help="Supersystem XYZ path")
+    parser.add_argument("--basis", default="cc-pVDZ", help="Basis set for supermolecule and fragments")
+    parser.add_argument("--workdir", default="/Users/sarath/Documents/Research/ExaGrad/benchmarks/rose_master_pyridine_dimer_recalc", help="Benchmark work directory")
+    parser.add_argument("--rose-root", default="/Users/sarath/Documents/Research/ExaGrad/rose-master", help="rose-master root path")
+    parser.add_argument("--version", default="Stndrd_2013", help="ROSE .VERSION for INPUT_GENIBO")
+    parser.add_argument("--exponent", type=int, default=2, help="ROSE localization exponent")
+    parser.add_argument("--charge", type=int, default=0, help="Molecular charge")
+    parser.add_argument("--multiplicity", type=int, default=1, help="Molecular multiplicity")
+    parser.add_argument("--nfrags", type=int, default=2, help="Number of fragments")
+    parser.add_argument("--natoms-per-frag", type=int, default=11, help="Atoms per fragment; set 0 to auto")
+    parser.add_argument("--threads", type=int, default=1, help="OMP/OpenBLAS thread count")
+    parser.add_argument("--report", default="timing_breakdown.json", help="Output JSON filename inside workdir")
+    parser.add_argument("--keep-existing", action="store_true", help="Do not delete existing workdir files before run")
+    args = parser.parse_args()
+
+    xyz_path = Path(args.xyz).resolve()
+    rose_root = Path(args.rose_root).resolve()
+    rose_exe = rose_root / "bin" / "rose.x"
+    workdir = Path(args.workdir).resolve()
+
+    if not xyz_path.exists():
+        raise FileNotFoundError(f"XYZ not found: {xyz_path}")
+    if not rose_exe.exists():
+        raise FileNotFoundError(f"ROSE executable not found: {rose_exe}")
+
+    if workdir.exists() and not args.keep_existing:
+        for item in workdir.iterdir():
+            if item.is_file() or item.is_symlink():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    os.environ["OMP_NUM_THREADS"] = str(args.threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(args.threads)
+
+    import sys
+    sys.path.append(str(rose_root / "python_scripts" / "genibo"))
+    from genibo_MOcoeff import moldata, run_pyscf_mocoeff
+
+    atoms = parse_xyz(xyz_path)
+    natoms_per_frag = None if args.natoms_per_frag == 0 else args.natoms_per_frag
+    fragments = split_fragments(atoms, args.nfrags, natoms_per_frag)
+
+    print("=== Full PySCF + ROSE pipeline timing ===")
+    print(f"xyz        : {xyz_path}")
+    print(f"basis      : {args.basis}")
+    print(f"workdir    : {workdir}")
+    print(f"threads    : {args.threads}")
+    print(f"fragments  : {args.nfrags} (atoms/frag={len(fragments[0])})")
+    print(f"rose exe   : {rose_exe}")
+    print()
+
+    timings: dict[str, float] = {}
+    phase_meta: dict[str, Any] = {}
+
+    t_total0 = time.perf_counter()
+
+    t0 = time.perf_counter()
+    write_input_genibo(workdir / "INPUT_GENIBO", args.nfrags, args.version, args.charge, args.exponent)
+    timings["input_preparation"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    molecule = moldata(geometry=atoms, multiplicity=args.multiplicity, charge=args.charge, data_directory=str(workdir))
+    molecule, pyscf_mol, mf = run_pyscf_mocoeff(
+        molecule,
+        basis=args.basis,
+        relativistic=False,
+        spherical=False,
+        restricted=(args.multiplicity == 1),
+        openshell=(args.multiplicity > 1),
+        save=True,
+        uncontract=False,
+    )
+    move_if_exists(workdir / f"{molecule.name}.h5", workdir / "MOLECULE.h5")
+    move_if_exists(workdir / f"{molecule.name}.chk", workdir / "MOLECULE.chk")
+    timings["pyscf_super_scf"] = time.perf_counter() - t0
+    phase_meta["super_nao"] = int(pyscf_mol.nao_nr())
+    phase_meta["super_nelec"] = int(pyscf_mol.nelectron)
+
+    fragment_times: list[float] = []
+    for idx, frag_geom in enumerate(fragments):
+        t0 = time.perf_counter()
+        fragment = moldata(geometry=frag_geom, multiplicity=1, charge=0, data_directory=str(workdir))
+        fragment, frag_mol, _ = run_pyscf_mocoeff(
+            fragment,
+            basis=args.basis,
+            relativistic=False,
+            spherical=False,
+            restricted=True,
+            openshell=False,
+            save=True,
+            uncontract=False,
+        )
+        move_if_exists(workdir / f"{fragment.name}.h5", workdir / f"frag{idx}.h5")
+        move_if_exists(workdir / f"{fragment.name}.chk", workdir / f"frag{idx}.chk")
+        dt = time.perf_counter() - t0
+        fragment_times.append(dt)
+        phase_meta[f"frag{idx}_nao"] = int(frag_mol.nao_nr())
+        phase_meta[f"frag{idx}_nelec"] = int(frag_mol.nelectron)
+
+    timings["pyscf_fragments_total"] = sum(fragment_times)
+    for idx, dt in enumerate(fragment_times):
+        timings[f"pyscf_fragment_{idx}"] = dt
+
+    t0 = time.perf_counter()
+    rose_log = workdir / "rose_localization.log"
+    with rose_log.open("w", encoding="utf-8") as out:
+        subprocess.run(
+            [str(rose_exe)],
+            cwd=str(workdir),
+            env=os.environ.copy(),
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+    timings["rose_localization"] = time.perf_counter() - t0
+
+    timings["total_pipeline"] = time.perf_counter() - t_total0
+
+    known_parts = (
+        timings["input_preparation"]
+        + timings["pyscf_super_scf"]
+        + timings["pyscf_fragments_total"]
+        + timings["rose_localization"]
+    )
+    timings["other_overhead"] = max(timings["total_pipeline"] - known_parts, 0.0)
+
+    report = {
+        "settings": {
+            "xyz": str(xyz_path),
+            "basis": args.basis,
+            "workdir": str(workdir),
+            "rose_executable": str(rose_exe),
+            "version": args.version,
+            "exponent": args.exponent,
+            "charge": args.charge,
+            "multiplicity": args.multiplicity,
+            "nfrags": args.nfrags,
+            "atoms_per_fragment": len(fragments[0]),
+            "threads": args.threads,
+        },
+        "timings_seconds": timings,
+        "metadata": phase_meta,
+    }
+
+    report_path = workdir / args.report
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    print("--- Timing breakdown (wall time) ---")
+    print(f"input_preparation       : {format_seconds(timings['input_preparation'])}")
+    print(f"pyscf_super_scf         : {format_seconds(timings['pyscf_super_scf'])}")
+    for idx in range(args.nfrags):
+        print(f"pyscf_fragment_{idx}        : {format_seconds(timings[f'pyscf_fragment_{idx}'])}")
+    print(f"pyscf_fragments_total   : {format_seconds(timings['pyscf_fragments_total'])}")
+    print(f"rose_localization       : {format_seconds(timings['rose_localization'])}")
+    print(f"other_overhead          : {format_seconds(timings['other_overhead'])}")
+    print(f"total_pipeline          : {format_seconds(timings['total_pipeline'])}")
+    print()
+    print(f"Report written to: {report_path}")
+    print(f"ROSE log written to: {workdir / 'rose_localization.log'}")
+
+
+if __name__ == "__main__":
+    main()
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Sarathchandras-MacBook-Pro.local', release='25.3.0', version='Darwin Kernel Version 25.3.0: Wed Jan 28 20:54:22 PST 2026; root:xnu-12377.81.4~5/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.5 (main, Sep 11 2023, 08:31:25) [Clang 14.0.6 ]
+numpy 1.26.4  scipy 1.15.1
+Date: Fri Apr 10 18:32:52 2026
+PySCF version 2.4.0
+PySCF path  /Users/sarath/anaconda3/lib/python3.11/site-packages/pyscf
+
+[CONFIG] conf_file None
+[INPUT] verbose = 5
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 22
+[INPUT] num. electrons = 84
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry 0 subgroup None
+[INPUT] Mole.unit = angstrom
+[INPUT] Cartesian GTO integrals (6d 10f)
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 H      0.000000000000   2.061947000000   1.308539000000 AA    0.000000000000   3.896515113369   2.472780333312 Bohr   0.0
+[INPUT]  2 H      0.000000000000  -2.061947000000   1.308539000000 AA    0.000000000000  -3.896515113369   2.472780333312 Bohr   0.0
+[INPUT]  3 H      0.000000000000   2.156804000000  -1.184054000000 AA    0.000000000000   4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT]  4 H      0.000000000000  -2.156804000000  -1.184054000000 AA    0.000000000000  -4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT]  5 H      0.000000000000   0.000000000000  -2.475074000000 AA    0.000000000000   0.000000000000  -4.677211998032 Bohr   0.0
+[INPUT]  6 C      0.000000000000   1.145417000000   0.721005000000 AA    0.000000000000   2.164524428421   1.362501984442 Bohr   0.0
+[INPUT]  7 C      0.000000000000  -1.145417000000   0.721005000000 AA    0.000000000000  -2.164524428421   1.362501984442 Bohr   0.0
+[INPUT]  8 C      0.000000000000   1.197637000000  -0.673735000000 AA    0.000000000000   2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT]  9 C      0.000000000000  -1.197637000000  -0.673735000000 AA    0.000000000000  -2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT] 10 C      0.000000000000   0.000000000000  -1.387901000000 AA    0.000000000000   0.000000000000  -2.622752778010 Bohr   0.0
+[INPUT] 11 N      0.000000000000   0.000000000000   1.426610000000 AA    0.000000000000   0.000000000000   2.695902186566 Bohr   0.0
+[INPUT] 12 H      5.000000000000   2.061947000000   1.308539000000 AA    9.448630622825   3.896515113369   2.472780333312 Bohr   0.0
+[INPUT] 13 H      5.000000000000  -2.061947000000   1.308539000000 AA    9.448630622825  -3.896515113369   2.472780333312 Bohr   0.0
+[INPUT] 14 H      5.000000000000   2.156804000000  -1.184054000000 AA    9.448630622825   4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT] 15 H      5.000000000000  -2.156804000000  -1.184054000000 AA    9.448630622825  -4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT] 16 H      5.000000000000   0.000000000000  -2.475074000000 AA    9.448630622825   0.000000000000  -4.677211998032 Bohr   0.0
+[INPUT] 17 C      5.000000000000   1.145417000000   0.721005000000 AA    9.448630622825   2.164524428421   1.362501984442 Bohr   0.0
+[INPUT] 18 C      5.000000000000  -1.145417000000   0.721005000000 AA    9.448630622825  -2.164524428421   1.362501984442 Bohr   0.0
+[INPUT] 19 C      5.000000000000   1.197637000000  -0.673735000000 AA    9.448630622825   2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT] 20 C      5.000000000000  -1.197637000000  -0.673735000000 AA    9.448630622825  -2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT] 21 C      5.000000000000   0.000000000000  -1.387901000000 AA    9.448630622825   0.000000000000  -2.622752778010 Bohr   0.0
+[INPUT] 22 N      5.000000000000   0.000000000000   1.426610000000 AA    9.448630622825   0.000000000000   2.695902186566 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] C
+[INPUT] 0    0    [8    /2   ]  6665              0.000692 -0.000146
+                                1000              0.005329 -0.001154
+                                228               0.027077 -0.005725
+                                64.71             0.101718 -0.023312
+                                21.06             0.27474 -0.063955
+                                7.495             0.448564 -0.149981
+                                2.797             0.285074 -0.127262
+                                0.5215            0.015204 0.544529
+[INPUT] 0    0    [1    /1   ]  0.1596               1
+[INPUT] 1    0    [3    /1   ]  9.439             0.038109
+                                2.002             0.20948
+                                0.5456            0.508557
+[INPUT] 1    0    [1    /1   ]  0.1517               1
+[INPUT] 2    0    [1    /1   ]  0.55                 1
+[INPUT] H
+[INPUT] 0    0    [3    /1   ]  13.01             0.019685
+                                1.962             0.137977
+                                0.4446            0.478148
+[INPUT] 0    0    [1    /1   ]  0.122                1
+[INPUT] 1    0    [1    /1   ]  0.727                1
+[INPUT] N
+[INPUT] 0    0    [8    /2   ]  9046              0.0007 -0.000153
+                                1357              0.005389 -0.001208
+                                309.3             0.027406 -0.005992
+                                87.73             0.103207 -0.024544
+                                28.56             0.278723 -0.067459
+                                10.21             0.44854 -0.158078
+                                3.838             0.278238 -0.121831
+                                0.7466            0.01544 0.549003
+[INPUT] 0    0    [1    /1   ]  0.2248               1
+[INPUT] 1    0    [3    /1   ]  13.55             0.039919
+                                2.917             0.217169
+                                0.7973            0.510319
+[INPUT] 1    0    [1    /1   ]  0.2185               1
+[INPUT] 2    0    [1    /1   ]  0.817                1
+
+nuclear repulsion = 583.197272592674
+number of shells = 90
+number of NR pGTOs = 394
+number of NR cGTOs = 230
+basis = cc-pVDZ
+ecp = {}
+CPU time:         0.64
+
+
+******** <class 'pyscf.scf.hf.RHF'> ********
+method = RHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /Users/sarath/Documents/Research/ExaGrad/benchmarks/rose_master_pyridine_dimer_recalc/H10-C10-N2_singlet.chk
+max_memory 4000 MB (current use 0 MB)
+Overwritten attributes  get_occ  of <class 'pyscf.scf.hf.RHF'>
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.

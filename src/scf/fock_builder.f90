@@ -48,6 +48,8 @@ contains
             method_out = 'block_cholesky'
         case ('true_df', 'TRUE_DF', 'density_fitting', 'DENSITY_FITTING')
             method_out = 'true_df'
+        case ('blocked_true_df', 'BLOCKED_TRUE_DF', 'true_df_blocked', 'TRUE_DF_BLOCKED')
+            method_out = 'blocked_true_df'
         case default
             method_out = 'direct'
         end select
@@ -60,6 +62,8 @@ contains
         select case (trim(method))
         case ('true_df')
             label = 'RHF SCF (True-DF-JK)'
+        case ('blocked_true_df')
+            label = 'RHF SCF (Blocked-True-DF-JK)'
         case ('block_cholesky')
             label = 'RHF SCF (Cholesky-Block-JK)'
         case ('cholesky')
@@ -78,6 +82,9 @@ contains
         case ('true_df')
             Q = 0.0d0
             call initialize_true_df_factors()
+        case ('blocked_true_df')
+            Q = 0.0d0
+            call initialize_true_df_packed_factors()
         case ('block_cholesky', 'cholesky')
             Q = 0.0d0
             call initialize_cholesky_factors()
@@ -103,6 +110,9 @@ contains
             if (true_df_naux <= 0)   stop 'True-DF initialisation failed: no auxiliary rank'
             call contract_jk(true_df_B, true_df_naux, P, J, K)
 
+        case ('blocked_true_df')
+            call contract_jk_true_df_blocked(P, J, K, block_size=DEFAULT_BLOCK_SIZE)
+
         case ('block_cholesky')
             if (.not. cholesky_ready) call initialize_cholesky_factors()
             if (cholesky_naux <= 0)   stop 'Cholesky initialisation failed: no auxiliary rank'
@@ -121,7 +131,7 @@ contains
         ! For the DF/Cholesky paths K is the raw exchange sum; apply the 1/2 prefactor here.
         ! For the direct path the 1/2 is already inside contract_jk_direct (accumulated per ERI).
         select case (trim(method))
-        case ('true_df', 'block_cholesky', 'cholesky')
+        case ('true_df', 'blocked_true_df', 'block_cholesky', 'cholesky')
             F = Hcore + J - 0.5d0 * K
         case default
             F = Hcore + J - K
@@ -135,7 +145,7 @@ contains
         character(len=*), intent(in) :: method
 
         select case (trim(method))
-        case ('true_df')
+        case ('true_df', 'blocked_true_df')
             call clear_true_df_factors()
         case ('block_cholesky', 'cholesky')
             call clear_cholesky_factors()

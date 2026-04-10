@@ -1,0 +1,33 @@
+{
+  "settings": {
+    "xyz": "/Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer.xyz",
+    "basis": "cc-pVDZ",
+    "workdir": "/Users/sarath/Documents/Research/ExaGrad/benchmarks/rose_master_pyridine_dimer_recalc_ccpvdz",
+    "rose_executable": "/Users/sarath/Documents/Research/ExaGrad/rose-master/bin/rose.x",
+    "version": "Stndrd_2013",
+    "exponent": 2,
+    "charge": 0,
+    "multiplicity": 1,
+    "nfrags": 2,
+    "atoms_per_fragment": 11,
+    "threads": 8
+  },
+  "timings_seconds": {
+    "input_preparation": 0.0002254168502986431,
+    "pyscf_super_scf": 51.12405883288011,
+    "pyscf_fragments_total": 9.209401791216806,
+    "pyscf_fragment_0": 4.88658033311367,
+    "pyscf_fragment_1": 4.322821458103135,
+    "rose_localization": 1.1577677498571575,
+    "total_pipeline": 61.49200545903295,
+    "other_overhead": 0.0005516682285815477
+  },
+  "metadata": {
+    "super_nao": 230,
+    "super_nelec": 84,
+    "frag0_nao": 115,
+    "frag0_nelec": 42,
+    "frag1_nao": 115,
+    "frag1_nelec": 42
+  }
+}

@@ -28,6 +28,10 @@ module molecule_t
         real(c_double), allocatable :: mo_energies(:)
         integer(c_int) :: nocc = 0
         integer(c_int) :: nvir = 0
+        ! n_val_vir: number of fragment virtual MOs used as valence IAO references.
+        ! Hard virtual references = nvir - n_val_vir.
+        ! -1 (default) means use all fragment virtuals as valence (no hard virtuals).
+        integer(c_int) :: n_val_vir = -1_c_int
     end type fragment_scf_info
         
 

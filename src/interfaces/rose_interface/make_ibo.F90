@@ -10,7 +10,7 @@ module make_ibo
 
 contains
 
-   subroutine Localization(CMO_IAO,LMO_IAO,nmo_frag,Expnt)
+   subroutine Localization(CMO_IAO,LMO_IAO,nmo_frag,Expnt,LMO_transform)
    ! make intrinsic bond orbitals (IBOs) (localized occupied orbitals expressed in terms of IAOs)
    ! It consists in effectively minimizing the number of atoms an orbital is centered on.
    ! For this, unitary operations (rotations) are perform amongst the occupied (or valence virtual) MOs
@@ -26,6 +26,7 @@ contains
         real(8), intent(in)        :: CMO_IAO(:,:,:) ! Canonical MOs in terms of IAOs
         real(8), intent(inout)     :: LMO_IAO(:,:,:) ! Localized MO in terms of IAOs
         integer, intent(in)        :: Expnt
+      real(8), intent(inout), optional :: LMO_transform(:,:,:) ! Unitary transform in the original MO basis
         logical                    :: conv
         integer                    :: i,j,k,ij, imo, nmoi, it
         integer                    :: n_fragments, nact, nmo2, rcq
@@ -33,8 +34,8 @@ contains
         real(8)                    :: damping
         real(8), allocatable       :: Bij(:,:)
         real(8), allocatable       :: Bij_previous(:)
-        real(8), allocatable       :: Ai(:,:), Aj(:,:), Aj0(:,:)
-        real(8), allocatable       :: Pij(:),Qij(:),res(:)
+      real(8), allocatable       :: Ai(:,:), Aj(:,:)
+      real(8), allocatable       :: Pij(:),Qij(:),res(:)
 
         nmo2 = size(CMO_IAO,1)
         nact = size(CMO_IAO,2)
@@ -48,6 +49,17 @@ contains
            Bij_previous = 0.D0
            damping = 1.D0
         endif
+
+        if (present(LMO_transform)) then
+           if (size(LMO_transform,1) .ne. nact .or. size(LMO_transform,2) .ne. nact .or. size(LMO_transform,3) .ne. rcq) then
+              write(luout,*) 'Localization: LMO_transform dimensions inconsistent with active space.'
+              stop
+           end if
+           LMO_transform = 0.D0
+           do i = 1, nact
+              LMO_transform(i,i,1) = 1.D0
+           end do
+        end if
 
         LMO_IAO = CMO_IAO
 
@@ -173,45 +185,10 @@ contains
                   fGrad = fGrad + absBij**2.D0
                   phi = 0.25D0*datan2(absBij,-Aij)
 
-                  allocate(Ai(nmo2,rcq))
-                  allocate(Aj(nmo2,rcq))
-                  allocate(Aj0(nmo2,rcq))
-                  ! we need a copy of the original LMO_IAO(:,j,:) as this is overwritten in the first update
-                  Aj0 = LMO_IAO(:,j,:) 
-
-                  ! in the update of |j> we first need to multiply |i> with Pij.
-                  ! This makes Bij real and positive as was assumed in the calculation of phi with absBij.
-                  Aj = LMO_IAO(:,j,:) 
-                  if (rcq .eq. 1) then
-                     Ai = LMO_IAO(:,i,:)*Pij(1)
-                  else if (rcq .eq. 2) then
-                     Ai(:,1) = LMO_IAO(:,i,1)*Pij(1) - LMO_IAO(:,i,2)*Pij(2)
-                     Ai(:,2) = LMO_IAO(:,i,2)*Pij(1) + LMO_IAO(:,i,1)*Pij(2)
-                  else if (rcq .eq. 4) then
-                     Ai(:,1) = LMO_IAO(:,i,1)*Pij(1) - LMO_IAO(:,i,2)*Pij(2) - LMO_IAO(:,i,3)*Pij(3) - LMO_IAO(:,i,4)*Pij(4)
-                     Ai(:,2) = LMO_IAO(:,i,2)*Pij(1) + LMO_IAO(:,i,1)*Pij(2) + LMO_IAO(:,i,3)*Pij(4) - LMO_IAO(:,i,4)*Pij(3)
-                     Ai(:,3) = LMO_IAO(:,i,3)*Pij(1) + LMO_IAO(:,i,1)*Pij(3) + LMO_IAO(:,i,4)*Pij(2) - LMO_IAO(:,i,2)*Pij(4)
-                     Ai(:,4) = LMO_IAO(:,i,4)*Pij(1) + LMO_IAO(:,i,1)*Pij(4) + LMO_IAO(:,i,2)*Pij(3) - LMO_IAO(:,i,3)*Pij(2)
+                  call apply_pair_rotation(LMO_IAO(:,i,:), LMO_IAO(:,j,:), Pij, phi)
+                  if (present(LMO_transform)) then
+                     call apply_pair_rotation(LMO_transform(:,i,:), LMO_transform(:,j,:), Pij, phi)
                   end if
-                  LMO_IAO(:,j,:) =-dsin(phi)*Ai + dcos(phi)*Aj
- 
-                  ! in the update of |i> we first multiply |j> with Pij^*.
-                  ! This again makes Bij real and positive as was assumed in the calculation of phi with absBij.
-                  Ai = LMO_IAO(:,i,:)
-                  if (rcq .eq. 1) then
-                     Aj = Aj0*Pij(1)
-                  else if (rcq .eq. 2) then
-                     Aj(:,1) = Aj0(:,1)*Pij(1) + Aj0(:,2)*Pij(2)
-                     Aj(:,2) = Aj0(:,2)*Pij(1) - Aj0(:,1)*Pij(2)
-                  else if (rcq .eq. 4) then
-                     Aj(:,1) = Aj0(:,1)*Pij(1) + Aj0(:,2)*Pij(2) + Aj0(:,3)*Pij(3) + Aj0(:,4)*Pij(4)
-                     Aj(:,2) = Aj0(:,2)*Pij(1) - Aj0(:,1)*Pij(2) - Aj0(:,3)*Pij(4) + Aj0(:,4)*Pij(3)
-                     Aj(:,3) = Aj0(:,3)*Pij(1) - Aj0(:,1)*Pij(3) - Aj0(:,4)*Pij(2) + Aj0(:,2)*Pij(4)
-                     Aj(:,4) = Aj0(:,4)*Pij(1) - Aj0(:,1)*Pij(4) - Aj0(:,2)*Pij(3) + Aj0(:,3)*Pij(2)
-                  end if
-                  LMO_IAO(:,i,:) = dcos(phi)*Ai + dsin(phi)*Aj
- 
-                  deallocate(Ai,Aj,Aj0)
                   ! condition for the maximum in Ref. [3].
                   if (Expnt .eq. 2) then
                      max_condition = 16.D0*Aij*dcos(4.D0*phi) - 16.D0*absBij*dsin(4.D0*phi)
@@ -246,6 +223,53 @@ contains
         write(luout,*)
 
    end subroutine Localization
+
+   subroutine apply_pair_rotation(orb_i, orb_j, phase, phi)
+        implicit none
+
+        real(8), intent(inout) :: orb_i(:,:), orb_j(:,:)
+        real(8), intent(in)    :: phase(:)
+        real(8), intent(in)    :: phi
+
+        integer :: nrow, rcq
+        real(8), allocatable :: vec_i(:,:), vec_j(:,:), vec_j0(:,:)
+
+        nrow = size(orb_i,1)
+        rcq = size(orb_i,2)
+
+        allocate(vec_i(nrow,rcq), vec_j(nrow,rcq), vec_j0(nrow,rcq))
+
+        vec_j0 = orb_j
+        vec_j = orb_j
+        if (rcq .eq. 1) then
+           vec_i = orb_i*phase(1)
+        else if (rcq .eq. 2) then
+           vec_i(:,1) = orb_i(:,1)*phase(1) - orb_i(:,2)*phase(2)
+           vec_i(:,2) = orb_i(:,2)*phase(1) + orb_i(:,1)*phase(2)
+        else if (rcq .eq. 4) then
+           vec_i(:,1) = orb_i(:,1)*phase(1) - orb_i(:,2)*phase(2) - orb_i(:,3)*phase(3) - orb_i(:,4)*phase(4)
+           vec_i(:,2) = orb_i(:,2)*phase(1) + orb_i(:,1)*phase(2) + orb_i(:,3)*phase(4) - orb_i(:,4)*phase(3)
+           vec_i(:,3) = orb_i(:,3)*phase(1) + orb_i(:,1)*phase(3) + orb_i(:,4)*phase(2) - orb_i(:,2)*phase(4)
+           vec_i(:,4) = orb_i(:,4)*phase(1) + orb_i(:,1)*phase(4) + orb_i(:,2)*phase(3) - orb_i(:,3)*phase(2)
+        end if
+        orb_j = -dsin(phi)*vec_i + dcos(phi)*vec_j
+
+        vec_i = orb_i
+        if (rcq .eq. 1) then
+           vec_j = vec_j0*phase(1)
+        else if (rcq .eq. 2) then
+           vec_j(:,1) = vec_j0(:,1)*phase(1) + vec_j0(:,2)*phase(2)
+           vec_j(:,2) = vec_j0(:,2)*phase(1) - vec_j0(:,1)*phase(2)
+        else if (rcq .eq. 4) then
+           vec_j(:,1) = vec_j0(:,1)*phase(1) + vec_j0(:,2)*phase(2) + vec_j0(:,3)*phase(3) + vec_j0(:,4)*phase(4)
+           vec_j(:,2) = vec_j0(:,2)*phase(1) - vec_j0(:,1)*phase(2) - vec_j0(:,3)*phase(4) + vec_j0(:,4)*phase(3)
+           vec_j(:,3) = vec_j0(:,3)*phase(1) - vec_j0(:,1)*phase(3) - vec_j0(:,4)*phase(2) + vec_j0(:,2)*phase(4)
+           vec_j(:,4) = vec_j0(:,4)*phase(1) - vec_j0(:,1)*phase(4) - vec_j0(:,2)*phase(3) + vec_j0(:,3)*phase(2)
+        end if
+        orb_i = dcos(phi)*vec_i + dsin(phi)*vec_j
+
+        deallocate(vec_i, vec_j, vec_j0)
+   end subroutine apply_pair_rotation
 
    subroutine get_localization_func(LMO_IAO,nmo_frag,Expnt,func)
         ! Eq.(3) of [2]
@@ -284,7 +308,7 @@ contains
         deallocate(population)
    end subroutine get_localization_func
 
-   subroutine sort_on_fragments (LMO_IAO,nmo_frag,nlo_frag,frag_bias)
+   subroutine sort_on_fragments (LMO_IAO,nmo_frag,nlo_frag,frag_bias,LMO_transform)
    ! First assign and then sort the localized orbitals in terms of fragments 
 
         use linear_algebra
@@ -295,7 +319,9 @@ contains
         real(8), intent(in)        :: frag_bias(:)      ! Bias fragments when assigning LMOs (for non-polar bonds with nearly equal occupations)
         integer, intent(out)       :: nlo_frag(:)       ! Counts how many LMOs were assigned to each fragment
         real(8), intent(inout)     :: LMO_IAO(:,:,:)    ! Localized MO in terms of IAOs, will get sorted
+      real(8), intent(inout), optional :: LMO_transform(:,:,:) ! Same column permutation applied to the MO-space unitary
         real(8), allocatable       :: LMO_sorted(:,:,:) ! Scratch array to sort LMO_IAO
+      real(8), allocatable       :: transform_sorted(:,:,:) ! Scratch array to sort LMO_transform
         integer                    :: nmo2, nact, rcq, n_fragments, i_frag
         integer                    :: i, j, nmoi, imo
         real(8), allocatable       :: population(:), pop(:)
@@ -325,19 +351,25 @@ contains
         enddo
 
         allocate(LMO_sorted(nmo2,nact,rcq))
+        if (present(LMO_transform)) then
+           allocate(transform_sorted(size(LMO_transform,1), size(LMO_transform,2), size(LMO_transform,3)))
+        end if
         i = 0
         do i_frag = 1,n_fragments
            do j=1,nact
               if (map(j) == i_frag) then
                  i = i + 1
                  LMO_sorted(:,i,:) = LMO_IAO(:,j,:)
+                 if (present(LMO_transform)) transform_sorted(:,i,:) = LMO_transform(:,j,:)
               end if
            enddo
         enddo
 
         LMO_IAO = LMO_sorted
+        if (present(LMO_transform)) LMO_transform = transform_sorted
 
         deallocate(pop,map,population,LMO_sorted)
+        if (present(LMO_transform)) deallocate(transform_sorted)
 
    end subroutine sort_on_fragments
 

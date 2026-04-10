@@ -111,6 +111,11 @@ src/integrals/two_electron_df.o:    src/integrals/two_electron_df.f90 \
                                                 src/types/molecule_loader.o \
                                     src/interfaces/libcint_interface.o \
                                     src/interfaces/math_utils.o
+src/interfaces/transform_sigma.o:   src/interfaces/transform_sigma.f90 \
+                                    src/interfaces/math_utils.o \
+                                    src/integrals/jk_contraction.o \
+                                    src/interfaces/libcint_interface.o \
+                                    src/integrals/two_electron_df.o
 src/scf/fock_builder.o:             src/scf/fock_builder.f90 \
                                     src/integrals/jk_contraction.o \
                                     src/integrals/two_electron_cholesky.o \

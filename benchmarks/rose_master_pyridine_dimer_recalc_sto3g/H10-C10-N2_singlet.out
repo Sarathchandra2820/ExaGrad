@@ -1,0 +1,568 @@
+#INFO: **** input file is /Users/sarath/Documents/Research/ExaGrad/benchmarks/pyscf_full_pipeline_timing.py ****
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+
+def parse_xyz(xyz_path: Path) -> list[tuple[str, tuple[float, float, float]]]:
+    lines = xyz_path.read_text(encoding="utf-8").strip().splitlines()
+    natoms = int(lines[0].strip())
+    atom_lines = lines[2:2 + natoms]
+    atoms: list[tuple[str, tuple[float, float, float]]] = []
+    for line in atom_lines:
+        parts = line.split()
+        atoms.append((parts[0], (float(parts[1]), float(parts[2]), float(parts[3]))))
+    return atoms
+
+
+def split_fragments(atoms: list[tuple[str, tuple[float, float, float]]], nfrags: int, natoms_per_frag: int | None) -> list[list[tuple[str, tuple[float, float, float]]]]:
+    if natoms_per_frag is None:
+        if len(atoms) % nfrags != 0:
+            raise ValueError("Cannot split atoms evenly; provide --natoms-per-frag")
+        natoms_per_frag = len(atoms) // nfrags
+    if natoms_per_frag * nfrags > len(atoms):
+        raise ValueError("Requested fragments exceed total atoms")
+
+    fragments: list[list[tuple[str, tuple[float, float, float]]]] = []
+    for idx in range(nfrags):
+        start = idx * natoms_per_frag
+        end = start + natoms_per_frag
+        fragments.append(atoms[start:end])
+    return fragments
+
+
+def write_input_genibo(path: Path, nfrags: int, version: str, charge: int, exponent: int) -> None:
+    content = (
+        "**ROSE\n"
+        ".VERSION\n"
+        f"{version}\n"
+        ".CHARGE\n"
+        f"{charge}\n"
+        ".EXPONENT\n"
+        f"{exponent}\n"
+        ".FILE_FORMAT\n"
+        "h5\n"
+        ".NFRAGMENTS\n"
+        f"{nfrags}\n"
+        "*END OF INPUT\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def format_seconds(seconds: float) -> str:
+    return f"{seconds:9.3f} s"
+
+
+def move_if_exists(src: Path, dst: Path) -> None:
+    if src.exists():
+        if dst.exists():
+            dst.unlink()
+        shutil.move(str(src), str(dst))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Full PySCF+ROSE pipeline timing with phase-by-phase wall-clock breakdown.")
+    parser.add_argument("--xyz", default="/Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer.xyz", help="Supersystem XYZ path")
+    parser.add_argument("--basis", default="cc-pVDZ", help="Basis set for supermolecule and fragments")
+    parser.add_argument("--workdir", default="/Users/sarath/Documents/Research/ExaGrad/benchmarks/rose_master_pyridine_dimer_recalc", help="Benchmark work directory")
+    parser.add_argument("--rose-root", default="/Users/sarath/Documents/Research/ExaGrad/rose-master", help="rose-master root path")
+    parser.add_argument("--version", default="Stndrd_2013", help="ROSE .VERSION for INPUT_GENIBO")
+    parser.add_argument("--exponent", type=int, default=2, help="ROSE localization exponent")
+    parser.add_argument("--charge", type=int, default=0, help="Molecular charge")
+    parser.add_argument("--multiplicity", type=int, default=1, help="Molecular multiplicity")
+    parser.add_argument("--nfrags", type=int, default=2, help="Number of fragments")
+    parser.add_argument("--natoms-per-frag", type=int, default=11, help="Atoms per fragment; set 0 to auto")
+    parser.add_argument("--threads", type=int, default=1, help="OMP/OpenBLAS thread count")
+    parser.add_argument("--report", default="timing_breakdown.json", help="Output JSON filename inside workdir")
+    parser.add_argument("--keep-existing", action="store_true", help="Do not delete existing workdir files before run")
+    args = parser.parse_args()
+
+    xyz_path = Path(args.xyz).resolve()
+    rose_root = Path(args.rose_root).resolve()
+    rose_exe = rose_root / "bin" / "rose.x"
+    workdir = Path(args.workdir).resolve()
+
+    if not xyz_path.exists():
+        raise FileNotFoundError(f"XYZ not found: {xyz_path}")
+    if not rose_exe.exists():
+        raise FileNotFoundError(f"ROSE executable not found: {rose_exe}")
+
+    if workdir.exists() and not args.keep_existing:
+        for item in workdir.iterdir():
+            if item.is_file() or item.is_symlink():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    os.environ["OMP_NUM_THREADS"] = str(args.threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(args.threads)
+
+    import sys
+    sys.path.append(str(rose_root / "python_scripts" / "genibo"))
+    from genibo_MOcoeff import moldata, run_pyscf_mocoeff
+
+    atoms = parse_xyz(xyz_path)
+    natoms_per_frag = None if args.natoms_per_frag == 0 else args.natoms_per_frag
+    fragments = split_fragments(atoms, args.nfrags, natoms_per_frag)
+
+    print("=== Full PySCF + ROSE pipeline timing ===")
+    print(f"xyz        : {xyz_path}")
+    print(f"basis      : {args.basis}")
+    print(f"workdir    : {workdir}")
+    print(f"threads    : {args.threads}")
+    print(f"fragments  : {args.nfrags} (atoms/frag={len(fragments[0])})")
+    print(f"rose exe   : {rose_exe}")
+    print()
+
+    timings: dict[str, float] = {}
+    phase_meta: dict[str, Any] = {}
+
+    t_total0 = time.perf_counter()
+
+    t0 = time.perf_counter()
+    write_input_genibo(workdir / "INPUT_GENIBO", args.nfrags, args.version, args.charge, args.exponent)
+    timings["input_preparation"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    molecule = moldata(geometry=atoms, multiplicity=args.multiplicity, charge=args.charge, data_directory=str(workdir))
+    molecule, pyscf_mol, mf = run_pyscf_mocoeff(
+        molecule,
+        basis=args.basis,
+        relativistic=False,
+        spherical=False,
+        restricted=(args.multiplicity == 1),
+        openshell=(args.multiplicity > 1),
+        save=True,
+        uncontract=False,
+    )
+    move_if_exists(workdir / f"{molecule.name}.h5", workdir / "MOLECULE.h5")
+    move_if_exists(workdir / f"{molecule.name}.chk", workdir / "MOLECULE.chk")
+    timings["pyscf_super_scf"] = time.perf_counter() - t0
+    phase_meta["super_nao"] = int(pyscf_mol.nao_nr())
+    phase_meta["super_nelec"] = int(pyscf_mol.nelectron)
+
+    fragment_times: list[float] = []
+    for idx, frag_geom in enumerate(fragments):
+        t0 = time.perf_counter()
+        fragment = moldata(geometry=frag_geom, multiplicity=1, charge=0, data_directory=str(workdir))
+        fragment, frag_mol, _ = run_pyscf_mocoeff(
+            fragment,
+            basis=args.basis,
+            relativistic=False,
+            spherical=False,
+            restricted=True,
+            openshell=False,
+            save=True,
+            uncontract=False,
+        )
+        move_if_exists(workdir / f"{fragment.name}.h5", workdir / f"frag{idx}.h5")
+        move_if_exists(workdir / f"{fragment.name}.chk", workdir / f"frag{idx}.chk")
+        dt = time.perf_counter() - t0
+        fragment_times.append(dt)
+        phase_meta[f"frag{idx}_nao"] = int(frag_mol.nao_nr())
+        phase_meta[f"frag{idx}_nelec"] = int(frag_mol.nelectron)
+
+    timings["pyscf_fragments_total"] = sum(fragment_times)
+    for idx, dt in enumerate(fragment_times):
+        timings[f"pyscf_fragment_{idx}"] = dt
+
+    t0 = time.perf_counter()
+    rose_log = workdir / "rose_localization.log"
+    with rose_log.open("w", encoding="utf-8") as out:
+        subprocess.run(
+            [str(rose_exe)],
+            cwd=str(workdir),
+            env=os.environ.copy(),
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+    timings["rose_localization"] = time.perf_counter() - t0
+
+    timings["total_pipeline"] = time.perf_counter() - t_total0
+
+    known_parts = (
+        timings["input_preparation"]
+        + timings["pyscf_super_scf"]
+        + timings["pyscf_fragments_total"]
+        + timings["rose_localization"]
+    )
+    timings["other_overhead"] = max(timings["total_pipeline"] - known_parts, 0.0)
+
+    report = {
+        "settings": {
+            "xyz": str(xyz_path),
+            "basis": args.basis,
+            "workdir": str(workdir),
+            "rose_executable": str(rose_exe),
+            "version": args.version,
+            "exponent": args.exponent,
+            "charge": args.charge,
+            "multiplicity": args.multiplicity,
+            "nfrags": args.nfrags,
+            "atoms_per_fragment": len(fragments[0]),
+            "threads": args.threads,
+        },
+        "timings_seconds": timings,
+        "metadata": phase_meta,
+    }
+
+    report_path = workdir / args.report
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    print("--- Timing breakdown (wall time) ---")
+    print(f"input_preparation       : {format_seconds(timings['input_preparation'])}")
+    print(f"pyscf_super_scf         : {format_seconds(timings['pyscf_super_scf'])}")
+    for idx in range(args.nfrags):
+        print(f"pyscf_fragment_{idx}        : {format_seconds(timings[f'pyscf_fragment_{idx}'])}")
+    print(f"pyscf_fragments_total   : {format_seconds(timings['pyscf_fragments_total'])}")
+    print(f"rose_localization       : {format_seconds(timings['rose_localization'])}")
+    print(f"other_overhead          : {format_seconds(timings['other_overhead'])}")
+    print(f"total_pipeline          : {format_seconds(timings['total_pipeline'])}")
+    print()
+    print(f"Report written to: {report_path}")
+    print(f"ROSE log written to: {workdir / 'rose_localization.log'}")
+
+
+if __name__ == "__main__":
+    main()
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Sarathchandras-MacBook-Pro.local', release='25.3.0', version='Darwin Kernel Version 25.3.0: Wed Jan 28 20:54:22 PST 2026; root:xnu-12377.81.4~5/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.5 (main, Sep 11 2023, 08:31:25) [Clang 14.0.6 ]
+numpy 1.26.4  scipy 1.15.1
+Date: Fri Apr 10 18:33:21 2026
+PySCF version 2.4.0
+PySCF path  /Users/sarath/anaconda3/lib/python3.11/site-packages/pyscf
+
+[CONFIG] conf_file None
+[INPUT] verbose = 5
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 22
+[INPUT] num. electrons = 84
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry 0 subgroup None
+[INPUT] Mole.unit = angstrom
+[INPUT] Cartesian GTO integrals (6d 10f)
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 H      0.000000000000   2.061947000000   1.308539000000 AA    0.000000000000   3.896515113369   2.472780333312 Bohr   0.0
+[INPUT]  2 H      0.000000000000  -2.061947000000   1.308539000000 AA    0.000000000000  -3.896515113369   2.472780333312 Bohr   0.0
+[INPUT]  3 H      0.000000000000   2.156804000000  -1.184054000000 AA    0.000000000000   4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT]  4 H      0.000000000000  -2.156804000000  -1.184054000000 AA    0.000000000000  -4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT]  5 H      0.000000000000   0.000000000000  -2.475074000000 AA    0.000000000000   0.000000000000  -4.677211998032 Bohr   0.0
+[INPUT]  6 C      0.000000000000   1.145417000000   0.721005000000 AA    0.000000000000   2.164524428421   1.362501984442 Bohr   0.0
+[INPUT]  7 C      0.000000000000  -1.145417000000   0.721005000000 AA    0.000000000000  -2.164524428421   1.362501984442 Bohr   0.0
+[INPUT]  8 C      0.000000000000   1.197637000000  -0.673735000000 AA    0.000000000000   2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT]  9 C      0.000000000000  -1.197637000000  -0.673735000000 AA    0.000000000000  -2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT] 10 C      0.000000000000   0.000000000000  -1.387901000000 AA    0.000000000000   0.000000000000  -2.622752778010 Bohr   0.0
+[INPUT] 11 N      0.000000000000   0.000000000000   1.426610000000 AA    0.000000000000   0.000000000000   2.695902186566 Bohr   0.0
+[INPUT] 12 H      5.000000000000   2.061947000000   1.308539000000 AA    9.448630622825   3.896515113369   2.472780333312 Bohr   0.0
+[INPUT] 13 H      5.000000000000  -2.061947000000   1.308539000000 AA    9.448630622825  -3.896515113369   2.472780333312 Bohr   0.0
+[INPUT] 14 H      5.000000000000   2.156804000000  -1.184054000000 AA    9.448630622825   4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT] 15 H      5.000000000000  -2.156804000000  -1.184054000000 AA    9.448630622825  -4.075768864366  -2.237537776696 Bohr   0.0
+[INPUT] 16 H      5.000000000000   0.000000000000  -2.475074000000 AA    9.448630622825   0.000000000000  -4.677211998032 Bohr   0.0
+[INPUT] 17 C      5.000000000000   1.145417000000   0.721005000000 AA    9.448630622825   2.164524428421   1.362501984442 Bohr   0.0
+[INPUT] 18 C      5.000000000000  -1.145417000000   0.721005000000 AA    9.448630622825  -2.164524428421   1.362501984442 Bohr   0.0
+[INPUT] 19 C      5.000000000000   1.197637000000  -0.673735000000 AA    9.448630622825   2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT] 20 C      5.000000000000  -1.197637000000  -0.673735000000 AA    9.448630622825  -2.263205926646  -1.273174630534 Bohr   0.0
+[INPUT] 21 C      5.000000000000   0.000000000000  -1.387901000000 AA    9.448630622825   0.000000000000  -2.622752778010 Bohr   0.0
+[INPUT] 22 N      5.000000000000   0.000000000000   1.426610000000 AA    9.448630622825   0.000000000000   2.695902186566 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] H
+[INPUT] 0    0    [3    /1   ]  3.42525091        0.15432897
+                                0.62391373        0.53532814
+                                0.1688554         0.44463454
+[INPUT] N
+[INPUT] 0    0    [3    /1   ]  99.106169         0.15432897
+                                18.052312         0.53532814
+                                4.8856602         0.44463454
+[INPUT] 0    0    [3    /1   ]  3.7804559         -0.09996723
+                                0.8784966         0.39951283
+                                0.2857144         0.70011547
+[INPUT] 1    0    [3    /1   ]  3.7804559         0.15591627
+                                0.8784966         0.60768372
+                                0.2857144         0.39195739
+[INPUT] C
+[INPUT] 0    0    [3    /1   ]  71.616837         0.15432897
+                                13.045096         0.53532814
+                                3.5305122         0.44463454
+[INPUT] 0    0    [3    /1   ]  2.9412494         -0.09996723
+                                0.6834831         0.39951283
+                                0.2222899         0.70011547
+[INPUT] 1    0    [3    /1   ]  2.9412494         0.15591627
+                                0.6834831         0.60768372
+                                0.2222899         0.39195739
+
+nuclear repulsion = 583.197272592674
+number of shells = 46
+number of NR pGTOs = 210
+number of NR cGTOs = 70
+basis = sto-3g
+ecp = {}
+CPU time:         0.54
+
+
+******** <class 'pyscf.scf.hf.RHF'> ********
+method = RHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /Users/sarath/Documents/Research/ExaGrad/benchmarks/rose_master_pyridine_dimer_recalc_sto3g/H10-C10-N2_singlet.chk
+max_memory 4000 MB (current use 0 MB)
+Overwritten attributes  get_occ  of <class 'pyscf.scf.hf.RHF'>
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.
+E1 = -1814.9673474074998  E_coul = 740.9510910115501
+init E= -490.818983803276
+cond(S) = 14.072651324605522
+    CPU time for initialize scf      1.85 sec, wall time      1.87 sec
+  HOMO = -0.205103076976289  LUMO = 0.0863129755609235
+  mo_energy =
+[-15.4983679  -15.49836627 -11.11792295 -11.11790851 -11.11466629
+ -11.11466212 -11.1127518  -11.11275049 -11.10846217 -11.10845815
+ -11.10801334 -11.1080114   -1.71640786  -1.71531955  -1.3755223
+  -1.37495133  -1.30015045  -1.29949971  -0.92327106  -0.92300239
+  -0.91486338  -0.91455539  -0.66929708  -0.66893968  -0.59311845
+  -0.59289878  -0.52027398  -0.52021958  -0.45985006  -0.45962544
+  -0.44789466  -0.4465997   -0.43267523  -0.43253746  -0.34318589
+  -0.34307842  -0.27027788  -0.26940362  -0.23882644  -0.23878274
+  -0.20602872  -0.20510308   0.08631298   0.08674621   0.1332852
+   0.13368013   0.32129439   0.32154635   0.45075772   0.45106838
+   0.50474023   0.50494366   0.50783609   0.50797165   0.53427071
+   0.53437647   0.53695369   0.53705082   0.64818716   0.64834426
+   0.71929376   0.71938585   0.75488233   0.75493738   0.76556745
+   0.7656852    0.943862     0.94386879   0.97086134   0.97097162]
+E1 = -1820.3250217448517  E_coul = 749.9784687025386
+cycle= 1 E= -487.149280449639  delta_E= 3.67  |g|= 0.562  |ddm|= 6.55
+    CPU time for cycle= 1      0.02 sec, wall time      0.02 sec
+  HOMO = -0.24470542035103  LUMO = 0.242438401777999
+  mo_energy =
+[-15.12056485 -15.12056482 -11.12250709 -11.12250694 -11.12230878
+ -11.1223086  -11.10804897 -11.10804883 -11.05378273 -11.05378258
+ -11.05371827 -11.05371814  -1.16763504  -1.167578    -1.03243309
+  -1.03237149  -0.99253763  -0.99245841  -0.81449134  -0.81442679
+  -0.79326915  -0.79320251  -0.6835016   -0.6834266   -0.61597076
+  -0.61589027  -0.58041685  -0.5804003   -0.55525079  -0.55518895
+  -0.52219112  -0.52214454  -0.48620256  -0.48566911  -0.44744788
+  -0.44740263  -0.30865225  -0.30817611  -0.30133342  -0.30101107
+  -0.24471919  -0.24470542   0.2424384    0.24273578   0.24491341
+   0.24516184   0.48270372   0.4828955    0.55487658   0.55509634
+   0.61729801   0.6174916    0.66504991   0.6651627    0.68207794
+   0.68220216   0.68699444   0.68706469   0.76593088   0.76602233
+   0.85273001   0.85286875   0.86521507   0.86526675   0.88007166
+   0.88011248   1.0813446    1.08145146   1.09257667   1.09259009]
+E1 = -1819.8786778338808  E_coul = 749.4275200810788
+cycle= 2 E= -487.253885160128  delta_E= -0.105  |g|= 0.264  |ddm|= 1.03
+    CPU time for cycle= 2      0.02 sec, wall time      0.02 sec
+  HOMO = -0.293976431117281  LUMO = 0.239597751436008
+  mo_energy =
+[-15.35890569 -15.35890567 -11.0756083  -11.07560814 -11.07540802
+ -11.07540783 -11.04608141 -11.04608127 -11.03003281 -11.03003266
+ -11.02996701 -11.02996687  -1.20374171  -1.20370285  -1.02777069
+  -1.02769722  -0.97534265  -0.97526386  -0.79999924  -0.79992947
+  -0.79408731  -0.79402569  -0.67092812  -0.67085475  -0.60326894
+  -0.60318608  -0.58574675  -0.58572923  -0.54328455  -0.54322025
+  -0.51411046  -0.51406567  -0.49065066  -0.49018363  -0.45247779
+  -0.45242877  -0.33559682  -0.33557849  -0.31982346  -0.31946196
+  -0.29445554  -0.29397643   0.23959775   0.23987008   0.25404751
+   0.2543457    0.48191868   0.48212332   0.57925108   0.57947303
+   0.62790841   0.62810026   0.66336205   0.6634811    0.70505349
+   0.70512149   0.70604792   0.70613795   0.76654175   0.76666879
+   0.8586063    0.85873457   0.87603314   0.87608066   0.88488851
+   0.88495031   1.0750086    1.07501643   1.09379063   1.09389463]
+E1 = -1819.9070723917246  E_coul = 749.4364206878007
+cycle= 3 E= -487.27337911125  delta_E= -0.0195  |g|= 0.0572  |ddm|= 0.371
+    CPU time for cycle= 3      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297670927792268  LUMO = 0.241841909810877
+  mo_energy =
+[-15.33298087 -15.33298085 -11.06931424 -11.06931408 -11.06910851
+ -11.06910832 -11.06476814 -11.064768   -11.05113919 -11.05113905
+ -11.05107659 -11.05107645  -1.19576541  -1.19572431  -1.03309654
+  -1.03302495  -0.97583092  -0.97575161  -0.80251981  -0.80245169
+  -0.79354899  -0.79348761  -0.67376591  -0.67369191  -0.60653882
+  -0.6064564   -0.58941959  -0.58940386  -0.54786657  -0.54780272
+  -0.51935559  -0.51931055  -0.49067625  -0.49019204  -0.45709061
+  -0.45704108  -0.32999048  -0.3299731   -0.32120371  -0.32085573
+  -0.29814904  -0.29767093   0.24184191   0.24210994   0.2505995
+   0.25089647   0.48119631   0.48139866   0.57501071   0.57523292
+   0.62770698   0.62789949   0.6724694    0.67259231   0.70168657
+   0.70177536   0.70699113   0.70705861   0.76455747   0.76468025
+   0.85647878   0.85660714   0.87424585   0.87429502   0.88161996
+   0.88168141   1.07403207   1.07404101   1.08680605   1.08691137]
+E1 = -1819.8980670514677  E_coul = 749.4255874429225
+cycle= 4 E= -487.275207015872  delta_E= -0.00183  |g|= 0.0186  |ddm|= 0.135
+    CPU time for cycle= 4      0.02 sec, wall time      0.02 sec
+  HOMO = -0.29753707749191  LUMO = 0.242702358777592
+  mo_energy =
+[-15.33676571 -15.33676569 -11.07576346 -11.0757633  -11.07555877
+ -11.07555858 -11.0575652  -11.05756506 -11.04454349 -11.04454335
+ -11.04447956 -11.04447943  -1.19806783  -1.19802749  -1.03037009
+  -1.03029775  -0.97559986  -0.97552067  -0.80153273  -0.80146421
+  -0.79340271  -0.79334129  -0.67321037  -0.67313661  -0.6056734
+  -0.60559099  -0.58920111  -0.5891849   -0.54764142  -0.54757755
+  -0.51784028  -0.51779514  -0.49061814  -0.49013746  -0.45666187
+  -0.45661272  -0.33286439  -0.33284701  -0.31976864  -0.31941505
+  -0.2980152   -0.29753708   0.24270236   0.24296945   0.25052711
+   0.2508242    0.48167873   0.4818807    0.57703734   0.57725961
+   0.62769942   0.62789207   0.66990226   0.67002403   0.70503633
+   0.70512547   0.70734892   0.70741663   0.76499441   0.76511836
+   0.8567783    0.85690847   0.87426498   0.87431412   0.88270007
+   0.88275969   1.07370305   1.07371164   1.08871207   1.08881693]
+E1 = -1819.894992544788  E_coul = 749.4223252202556
+cycle= 5 E= -487.275394731859  delta_E= -0.000188  |g|= 0.00898  |ddm|= 0.0333
+    CPU time for cycle= 5      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297291667311837  LUMO = 0.242991522384384
+  mo_energy =
+[-15.33890384 -15.33890382 -11.07285995 -11.07285979 -11.07265483
+ -11.07265464 -11.05740747 -11.05740733 -11.04537693 -11.04537678
+ -11.04531319 -11.04531305  -1.19784393  -1.19780367  -1.0304372
+  -1.03036481  -0.97506413  -0.97498486  -0.80104541  -0.80097674
+  -0.79329712  -0.7932357   -0.67288063  -0.67280695  -0.60562854
+  -0.605546    -0.58893362  -0.5889174   -0.54721473  -0.54715093
+  -0.51773089  -0.51768587  -0.49016341  -0.48968109  -0.45636884
+  -0.45631953  -0.33386237  -0.33384489  -0.31925555  -0.31890188
+  -0.29776987  -0.29729167   0.24299152   0.24325727   0.2506927
+   0.25098993   0.48194493   0.48214653   0.57690541   0.57712764
+   0.62801166   0.62820419   0.67063169   0.67075319   0.70477752
+   0.70486659   0.70770421   0.70777202   0.76512579   0.7652501
+   0.85676875   0.85689761   0.87503147   0.87508065   0.88299496
+   0.88305591   1.07398273   1.07399133   1.08881031   1.08891523]
+E1 = -1819.8875104467675  E_coul = 749.4147626733347
+cycle= 6 E= -487.275475180759  delta_E= -8.04e-05  |g|= 0.00238  |ddm|= 0.0324
+    CPU time for cycle= 6      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297605803712458  LUMO = 0.24293739438421
+  mo_energy =
+[-15.33997185 -15.33997183 -11.07292402 -11.07292386 -11.07271877
+ -11.07271858 -11.05659295 -11.05659281 -11.04636413 -11.04636398
+ -11.04629992 -11.04629979  -1.19827689  -1.19823669  -1.03062221
+  -1.03054983  -0.97536553  -0.97528631  -0.80116706  -0.80109845
+  -0.7935411   -0.79347975  -0.67288712  -0.67281348  -0.60583742
+  -0.60575489  -0.58922242  -0.58920619  -0.54742394  -0.54736012
+  -0.51772542  -0.51768031  -0.49046946  -0.48998747  -0.45656121
+  -0.45651189  -0.33443756  -0.33442003  -0.31946867  -0.31911474
+  -0.29808392  -0.2976058    0.24293739   0.24320309   0.25037314
+   0.25067031   0.48177311   0.48197465   0.57691765   0.57713992
+   0.62786256   0.62805505   0.67056098   0.67068231   0.70477805
+   0.70486695   0.70748765   0.70755541   0.76499682   0.76512122
+   0.85643203   0.85656084   0.87486618   0.87491562   0.88296763
+   0.88302874   1.07369776   1.07370635   1.08859472   1.08869964]
+E1 = -1819.8868515753684  E_coul = 749.4140981816679
+cycle= 7 E= -487.275480801027  delta_E= -5.62e-06  |g|= 0.000748  |ddm|= 0.00836
+    CPU time for cycle= 7      0.02 sec, wall time      0.02 sec
+  HOMO = -0.2975662087158  LUMO = 0.242882026318364
+  mo_energy =
+[-15.34006628 -15.34006626 -11.0727908  -11.07279065 -11.07258551
+ -11.07258532 -11.0569586  -11.05695846 -11.04630587 -11.04630572
+ -11.04624185 -11.04624172  -1.19827082  -1.19823062  -1.03069271
+  -1.03062034  -0.97533851  -0.97525929  -0.80117503  -0.80110644
+  -0.79354924  -0.79348791  -0.67288741  -0.67281376  -0.60584206
+  -0.60575953  -0.58923293  -0.5892167   -0.54740397  -0.54734015
+  -0.51777455  -0.51772946  -0.49047585  -0.48999383  -0.45658532
+  -0.45653598  -0.33443613  -0.33441859  -0.31952783  -0.31917392
+  -0.29804432  -0.29756621   0.24288203   0.24314769   0.25041397
+   0.25071113   0.48176983   0.48197137   0.57689142   0.5771137
+   0.62788375   0.62807623   0.67062596   0.67074729   0.70471681
+   0.70480569   0.70750861   0.70757637   0.76499124   0.76511567
+   0.85642466   0.85655338   0.87489231   0.87494173   0.88294322
+   0.88300444   1.07369388   1.07370247   1.08855813   1.08866306]
+E1 = -1819.8866464315302  E_coul = 749.4138924889244
+cycle= 8 E= -487.275481349932  delta_E= -5.49e-07  |g|= 0.000302  |ddm|= 0.00233
+    CPU time for cycle= 8      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297542376630898  LUMO = 0.242895216135467
+  mo_energy =
+[-15.34002705 -15.34002703 -11.07269875 -11.07269859 -11.07249342
+ -11.07249323 -11.05680981 -11.05680967 -11.04637294 -11.04637279
+ -11.04630885 -11.04630872  -1.19822852  -1.19818832  -1.03066521
+  -1.03059284  -0.97532394  -0.97524471  -0.80115262  -0.80108402
+  -0.79352778  -0.79346644  -0.67286487  -0.67279123  -0.60585143
+  -0.60576889  -0.58920625  -0.58919002  -0.54740228  -0.54733847
+  -0.51773365  -0.51768855  -0.49044353  -0.48996146  -0.45656765
+  -0.45651831  -0.33440365  -0.33438612  -0.31949183  -0.3191379
+  -0.29802049  -0.29754238   0.24289522   0.24316085   0.25043817
+   0.25073534   0.48178906   0.48199059   0.57689462   0.5771169
+   0.62788359   0.62807608   0.67066242   0.67078376   0.70472585
+   0.70481474   0.7075195    0.70758726   0.76502318   0.76514758
+   0.85641398   0.85654268   0.87490795   0.87495739   0.88298109
+   0.8830423    1.07371759   1.07372618   1.08857419   1.08867912]
+E1 = -1819.8864658636367  E_coul = 749.413711854221
+cycle= 9 E= -487.275481416742  delta_E= -6.68e-08  |g|= 4.97e-05  |ddm|= 0.000951
+    CPU time for cycle= 9      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297547651870092  LUMO = 0.242886736899118
+  mo_energy =
+[-15.34004411 -15.34004409 -11.07270371 -11.07270355 -11.07249838
+ -11.07249819 -11.05682101 -11.05682087 -11.0463929  -11.04639275
+ -11.04632881 -11.04632868  -1.19823589  -1.19819568  -1.03067451
+  -1.03060213  -0.97533169  -0.97525247  -0.80115908  -0.80109048
+  -0.7935336   -0.79347226  -0.67286921  -0.67279557  -0.60585595
+  -0.60577342  -0.58921559  -0.58919937  -0.54740854  -0.54734472
+  -0.51773739  -0.51769229  -0.49045248  -0.48997042  -0.45657183
+  -0.45652249  -0.33441163  -0.3343941   -0.31950411  -0.31915019
+  -0.29802577  -0.29754765   0.24288674   0.24315237   0.25043227
+   0.25072944   0.48178197   0.48198351   0.57688913   0.57711141
+   0.62787808   0.62807057   0.67066153   0.67078287   0.70471887
+   0.70480775   0.70751429   0.70758205   0.76501646   0.76514087
+   0.85640629   0.856535     0.87490048   0.87494993   0.88297675
+   0.88303797   1.07370991   1.0737185    1.08856525   1.08867018]
+E1 = -1819.8864751426158  E_coul = 749.4137211311092
+cycle= 10 E= -487.275481418833  delta_E= -2.09e-09  |g|= 7.72e-06  |ddm|= 0.000164
+    CPU time for cycle= 10      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297546013853976  LUMO = 0.242888033923526
+  mo_energy =
+[-15.34004064 -15.34004062 -11.07270144 -11.07270128 -11.0724961
+ -11.07249591 -11.05681791 -11.05681777 -11.0463919  -11.04639176
+ -11.04632781 -11.04632768  -1.19823367  -1.19819347  -1.03067308
+  -1.03060071  -0.97533078  -0.97525155  -0.80115817  -0.80108958
+  -0.79353246  -0.79347112  -0.67286841  -0.67279477  -0.60585586
+  -0.60577332  -0.58921393  -0.5891977   -0.54740809  -0.54734427
+  -0.51773611  -0.517691    -0.490451    -0.48996894  -0.45657073
+  -0.45652139  -0.33441012  -0.33439259  -0.31950294  -0.31914902
+  -0.29802413  -0.29754601   0.24288803   0.24315367   0.2504337
+   0.25073087   0.48178339   0.48198492   0.57688943   0.5771117
+   0.62787861   0.62807109   0.67066255   0.67078388   0.7047196
+   0.70480848   0.70751536   0.70758312   0.76501783   0.76514224
+   0.85640721   0.85653591   0.87490146   0.8749509    0.88297836
+   0.88303958   1.07371167   1.07372027   1.08856659   1.08867152]
+E1 = -1819.8864724940318  E_coul = 749.4137184824873
+cycle= 11 E= -487.275481418871  delta_E= -3.8e-11  |g|= 1.32e-06  |ddm|= 1.96e-05
+    CPU time for cycle= 11      0.02 sec, wall time      0.02 sec
+  HOMO = -0.297546301436841  LUMO = 0.242887757690966
+  mo_energy =
+[-15.34004095 -15.34004093 -11.0727021  -11.07270194 -11.07249677
+ -11.07249658 -11.05681794 -11.0568178  -11.04639232 -11.04639218
+ -11.04632824 -11.0463281   -1.19823404  -1.19819384  -1.03067327
+  -1.0306009   -0.97533109  -0.97525186  -0.80115837  -0.80108977
+  -0.79353266  -0.79347132  -0.67286852  -0.67279488  -0.60585596
+  -0.60577343  -0.5892142   -0.58919798  -0.5474083   -0.54734449
+  -0.51773623  -0.51769112  -0.49045131  -0.48996925  -0.45657093
+  -0.45652159  -0.33441044  -0.3343929   -0.31950323  -0.31914931
+  -0.29802442  -0.2975463    0.24288776   0.24315339   0.25043342
+   0.25073059   0.48178311   0.48198464   0.57688942   0.57711169
+   0.62787845   0.62807093   0.67066228   0.67078362   0.70471952
+   0.7048084    0.70751509   0.70758285   0.76501761   0.76514201
+   0.85640698   0.85653569   0.87490113   0.87495058   0.88297818
+   0.8830394    1.07371137   1.07371996   1.08856631   1.08867124]
+E1 = -1819.8864731111748  E_coul = 749.4137190996272
+Extra cycle  E= -487.275481418874  delta_E= -3.18e-12  |g|= 4.72e-07  |ddm|= 2.57e-06
+    CPU time for scf_cycle      2.11 sec, wall time      2.14 sec
+    CPU time for SCF      2.11 sec, wall time      2.14 sec
+converged SCF energy = -487.275481418874

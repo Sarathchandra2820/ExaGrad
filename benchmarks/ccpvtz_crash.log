@@ -1,0 +1,69 @@
+==> Detected supramolecule cue: using geometry/pyridine_dimer_rose/supra_mol.xyz
+==> Generating integrals for geometry/pyridine_dimer_rose/supra_mol.xyz with basis cc-pVTZ …
+    (supersystem + any frag_*.xyz fragments in geometry/pyridine_dimer_rose)
+Exported libcint env data to /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose
+Number of Atoms: 22
+Number of Shells: 168
+Total AO Basis Functions: 500
+Exporting fragment integrals for frag_1 -> /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_1
+Exported libcint env data to /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_1
+Number of Atoms: 11
+Number of Shells: 84
+Total AO Basis Functions: 250
+Exporting fragment integrals for frag_2 -> /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_2
+Exported libcint env data to /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_2
+Number of Atoms: 11
+Number of Shells: 84
+Total AO Basis Functions: 250
+Wrote rose manifest: /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/rose_info.txt (2 fragments)
+==> Exporting true DF metadata (supersystem + fragments) …
+Exported true DF metadata to /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/ints
+AO functions (mol): 500
+Aux functions      : 698
+Combined atoms     : 44
+Combined shells    : 398
+Aux basis          : weigend
+Exporting DF metadata for frag_1 -> /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_1
+Exported true DF metadata to /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_1/ints
+AO functions (mol): 250
+Aux functions      : 349
+Combined atoms     : 22
+Combined shells    : 199
+Aux basis          : weigend
+Exporting DF metadata for frag_2 -> /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_2
+Exported true DF metadata to /Users/sarath/Documents/Research/ExaGrad/geometry/pyridine_dimer_rose/frag_2/ints
+AO functions (mol): 250
+Aux functions      : 349
+Combined atoms     : 22
+Combined shells    : 199
+Aux basis          : weigend
+
+==> Compiling Fortran sources …
+make: `rhf_rose_main' is up to date.
+
+==> Running ROSE-RHF …
+  Fock builder : true_df
+  LMO ordering : fragment
+  Threads      : 8
+  Data dir     : geometry/pyridine_dimer_rose
+------------------------------------------------------------
+
+Program received signal SIGBUS: Access to an undefined portion of a memory object.
+
+Backtrace for this error:
+
+Program received signal SIGBUS: Access to an undefined portion of a memory object.
+
+Backtrace for this error:
+
+Program received signal SIGBUS: Access to an undefined portion of a memory object.
+
+Backtrace for this error:
+
+Program received signal SIGBUS: Access to an undefined portion of a memory object.
+
+Backtrace for this error:
+./run_rose.sh: line 166: 34769 Killed: 9               EXAGRAD_FOCK_BUILDER="$METHOD_LC" EXAGRAD_ROSE_ORBITAL_ORDER="$ROSE_ORDER_LC" EXAGRAD_MOL_DIR="$DATA_DIR" OMP_NUM_THREADS="$NTHREADS" OPENBLAS_NUM_THREADS="$NTHREADS" ./rhf_rose_main
+real 11.55
+user 14.73
+sys 1.45
