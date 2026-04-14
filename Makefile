@@ -5,7 +5,19 @@ MODDIR = src
 
 UNAME_S := $(shell uname -s)
 PYTHON  ?= python3
+CONDA   ?= $(shell command -v conda 2>/dev/null)
+CONDA_ENV ?= exagrad
 PYSCF_LIBDIR := $(shell $(PYTHON) -c "import os, pyscf; print(os.path.join(os.path.dirname(pyscf.__file__), 'lib', 'deps', 'lib'))" 2>/dev/null)
+
+ifeq ($(strip $(PYSCF_LIBDIR)),)
+ifneq ($(strip $(CONDA)),)
+PYSCF_LIBDIR := $(shell $(CONDA) run -n $(CONDA_ENV) python -c "import os, pyscf; print(os.path.join(os.path.dirname(pyscf.__file__), 'lib', 'deps', 'lib'))" 2>/dev/null)
+endif
+endif
+
+ifeq ($(strip $(PYSCF_LIBDIR)),)
+$(error Could not locate PySCF libcint library. Activate a PySCF-enabled environment or run 'make CONDA_ENV=<env-name>')
+endif
 
 ifeq ($(UNAME_S),Darwin)
 LIBCINT = $(PYSCF_LIBDIR)/libcint.6.dylib

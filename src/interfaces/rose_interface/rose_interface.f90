@@ -216,10 +216,13 @@ contains
             read(unit_id, '(A)') line_buf
             n_val_tmp = -1
             read(line_buf, *, iostat=ios) frag_dir_name, n_val_tmp
+           
             if (ios /= 0) read(line_buf, *, iostat=ios) frag_dir_name
             frag_path = trim(resolved_mol_dir)//'/'//trim(frag_dir_name)
 
-            print '(A,I0,A,A)', ' --- Fragment ', k, ': ', trim(frag_dir_name)
+        
+
+            print '(A,I0,A,A)', ' --- Fragment ', k, ': ', trim(frag_dir_name), ' ---  n_val_vir = ', n_val_tmp
             print *, '------------------------------------------------------------'
 
             call init_molecule(mol_frag(k), trim(frag_path))

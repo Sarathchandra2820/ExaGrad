@@ -7,6 +7,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+PYTHON_CMD=("${PYTHON:-python3}")
+CONDA_ENV="${CONDA_ENV:-exagrad}"
+if ! "${PYTHON_CMD[@]}" -c "import numpy, pyscf" >/dev/null 2>&1; then
+    if command -v conda >/dev/null 2>&1; then
+        PYTHON_CMD=(conda run -n "$CONDA_ENV" python)
+    fi
+fi
+
+if ! "${PYTHON_CMD[@]}" -c "import numpy, pyscf" >/dev/null 2>&1; then
+    echo "ERROR: Could not find a Python interpreter with numpy and pyscf."
+    echo "Set PYTHON to a working interpreter or set CONDA_ENV to the correct conda environment."
+    exit 2
+fi
+
 # --- defaults ------------------------------------------------
 XYZ="geometry/pyridine_dimer.xyz"
 BASIS="cc-pVDZ"
@@ -78,11 +92,11 @@ fi
 # --- generate integrals with PySCF / libcint -----------------
 echo "==> Generating integrals for $XYZ with basis $BASIS …"
 mkdir -p "$DATA_DIR/ints"
-python3 python/export_cint_env.py "$XYZ" "$BASIS" "$DATA_DIR"
+"${PYTHON_CMD[@]}" python/export_cint_env.py "$XYZ" "$BASIS" "$DATA_DIR"
 
 if [[ "$METHOD_LC" == "true_df" ]]; then
     echo "==> Exporting true DF metadata (combined env only) …"
-    python3 python/export_df_metadata.py "$XYZ" "$BASIS" "$AUXBASIS" "$DATA_DIR"
+    "${PYTHON_CMD[@]}" python/export_df_metadata.py "$XYZ" "$BASIS" "$AUXBASIS" "$DATA_DIR"
 fi
 echo ""
 
@@ -103,7 +117,7 @@ echo "------------------------------------------------------------"
 
 echo "==> Running PySCF reference and comparison …"
 set +e
-python3 python/compare_scf_energy.py \
+"${PYTHON_CMD[@]}" python/compare_scf_energy.py \
     --xyz "$XYZ" \
     --basis "$BASIS" \
     --fortran-method "$METHOD_LC" \
@@ -120,7 +134,7 @@ fi
 
 echo "==> Running PySCF polarizability comparison …"
 set +e
-python3 python/compare_polarizability.py \
+"${PYTHON_CMD[@]}" python/compare_polarizability.py \
     --xyz "$XYZ" \
     --basis "$BASIS" \
     --fortran-method "$METHOD_LC" \

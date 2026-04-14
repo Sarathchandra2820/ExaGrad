@@ -36,10 +36,7 @@ contains
             bs      = block_size
             nblocks = (naux + bs - 1) / bs
 
-            !$omp parallel default(none) &
-            !$omp   shared(naux, nao, P, B, nblocks, bs) &
-            !$omp   private(q, q0, q1, iblk, tid, nthreads, zq, T_local) &
-            !$omp   reduction(+: J, K)
+   
             allocate(T_local(nao,nao))
             tid      = omp_get_thread_num()
             nthreads = omp_get_num_threads()
@@ -54,15 +51,12 @@ contains
                 end do
             end do
             deallocate(T_local)
-            !$omp end parallel
+    
 
         else
-            !$omp parallel default(none) &
-            !$omp   shared(naux, nao, P, B) &
-            !$omp   private(q, zq, T_local) &
-            !$omp   reduction(+: J, K)
+
             allocate(T_local(nao,nao))
-            !$omp do schedule(dynamic)
+          
             do q = 1, naux
                 ! zq = sum(P * B(:,:,q))
                 ! J  = J + zq * B(:,:,q)
@@ -71,9 +65,9 @@ contains
                 call dgemm('N','N', nao,nao,nao, 1.0d0, B(:,:,q),nao, P,nao, 0.0d0, T_local,nao)
                 call dgemm('N','T', nao,nao,nao, 1.0d0, T_local,nao, B(:,:,q),nao, 1.0d0, K,nao)
             end do
-            !$omp end do
+
             deallocate(T_local)
-            !$omp end parallel
+
         end if
     end subroutine contract_jk
 
