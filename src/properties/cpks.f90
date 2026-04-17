@@ -143,6 +143,7 @@ contains
             cpks_naux = true_df_naux
             allocate(cpks_B(cpks_nao, cpks_nao, cpks_naux))
             cpks_B = true_df_B
+        
 
         case ('block_cholesky', 'cholesky')
             cpks_method_id = 1
