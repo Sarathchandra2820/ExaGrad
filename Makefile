@@ -66,10 +66,11 @@ ROSE_LIB_OBJS = \
     $(ROSE_DIR)/rose_properties_stub.o \
     $(ROSE_DIR)/make_iao.o \
     $(ROSE_DIR)/make_ibo.o \
-    $(ROSE_DIR)/rose_interface.o
+    $(ROSE_DIR)/rose_interface.o \
+    $(ROSE_DIR)/rose_davidson.o
 
 OBJS = $(COMMON_OBJS) src/programs/rhf_main.o
-ROSE_OBJS = $(COMMON_OBJS) $(ROSE_LIB_OBJS) src/programs/main_rose.o
+ROSE_OBJS = $(COMMON_OBJS) $(ROSE_LIB_OBJS) src/interfaces/utils.o src/programs/main_rose.o
 
 all: rhf_main
 
@@ -84,6 +85,7 @@ rhf_rose_main: $(ROSE_OBJS)
 # ---------------------------------------------------------------------------
 src/interfaces/libcint_interface.o: src/interfaces/libcint_interface.f90
 src/interfaces/math_utils.o:        src/interfaces/math_utils.f90
+src/interfaces/utils.o:             src/interfaces/utils.f90
 $(ROSE_DIR)/rose_global.o:          $(ROSE_DIR)/rose_global.F90
 $(ROSE_DIR)/linear_algebra.o:       $(ROSE_DIR)/linear_algebra.F90 \
                                     $(ROSE_DIR)/rose_global.o
@@ -103,6 +105,8 @@ $(ROSE_DIR)/make_ibo.o:             $(ROSE_DIR)/make_ibo.F90 \
 $(ROSE_DIR)/rose_interface.o:       $(ROSE_DIR)/rose_interface.f90 \
                                     $(ROSE_DIR)/make_iao.o \
                                     $(ROSE_DIR)/make_ibo.o
+$(ROSE_DIR)/rose_davidson.o:        $(ROSE_DIR)/rose_davidson.f90 \
+                                    src/types/molecule_t.o
 src/types/molecule_t.o:             src/types/molecule_t.f90 \
                                     src/interfaces/libcint_interface.o
 src/types/molecule_loader.o:        src/types/molecule_loader.f90 \
@@ -158,9 +162,13 @@ src/programs/rhf_main.o:            src/programs/rhf_main.f90 \
                                     src/properties/cpks.o
 src/programs/main_rose.o:           src/programs/main_rose.f90 \
                                     src/types/molecule_loader.o \
+                                    src/interfaces/utils.o \
                                     src/scf/fock_builder.o \
                                     src/scf/scf_driver.o \
-                                    $(ROSE_DIR)/rose_interface.o
+                                    src/properties/pol_initialisation.o \
+                                    src/properties/cpks.o \
+                                    $(ROSE_DIR)/rose_interface.o \
+                                    $(ROSE_DIR)/rose_davidson.o
 
 # ---------------------------------------------------------------------------
 # Pattern rules: compile .f90 / .F90 -> .o, emit .mod files into src/

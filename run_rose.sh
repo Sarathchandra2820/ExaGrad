@@ -26,6 +26,7 @@ XYZ=""
 BASIS="cc-pVDZ"
 METHOD="true_df"
 DATA_DIR="geometry/pyridine_rose"
+MODE="fragment_recanon"
 USER_SET_GEOMETRY=false
 if command -v nproc >/dev/null 2>&1; then
     DEFAULT_THREADS="$(nproc)"

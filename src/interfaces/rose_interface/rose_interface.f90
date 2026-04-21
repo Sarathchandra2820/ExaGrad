@@ -560,11 +560,12 @@ contains
     ! for each fragment k, stacks them, then calls the existing ROSE
     ! Localization routine from make_ibo.
     ! ================================================================
-    subroutine run_rose_localization(frag_scf_info, nfrags, lmo_occ, lmo_vir, ordering_mode, lmo_vir_hard)
+    subroutine run_rose_localization(frag_scf_info, nfrags, nlo_frag_occ, nlo_frag_vir, c_lmo_occ, U_occ, c_lmo_vir, U_vir, ordering_mode, lmo_vir_hard)
         implicit none
         type(fragment_scf_info), intent(in) :: frag_scf_info(0:)
         integer, intent(in) :: nfrags
-        real(c_double), allocatable, intent(out) :: lmo_occ(:,:), lmo_vir(:,:)
+        integer, allocatable, intent(out) ::  nlo_frag_occ(:), nlo_frag_vir(:)
+        real(c_double), allocatable, intent(out) :: c_lmo_occ(:,:), c_lmo_vir(:,:), U_occ(:,:), U_vir(:,:)
         ! lmo_vir_hard: localized hard virtual MOs in the IVO reference basis (nref_hard × nvir_hard).
         ! Only allocated when hard virtual references are present (any n_val_vir >= 0 and < nvir).
         real(c_double), allocatable, intent(out), optional :: lmo_vir_hard(:,:)
@@ -613,6 +614,7 @@ contains
         call Localization(CMO_frag, LMO_frag, nmo_frag, 2, LMO_rot)
 
         allocate(nlo_frag(nfrags))
+        allocate(nlo_frag_occ(nfrags))
         allocate(frag_bias(nfrags))
         frag_bias = 0.0d0
         call sort_on_fragments(LMO_frag, nmo_frag, nlo_frag, frag_bias, LMO_rot)
@@ -625,10 +627,18 @@ contains
         end do
         call print_orbital_populations(CMO_frag, LMO_frag, LMO_rot, frag_scf_info(0)%mo_energies(1:nocc_sm), nmo_frag, nfrags, 'OCC')
 
-        allocate(lmo_occ(size(LMO_frag, 1), size(LMO_frag, 2)))
-        lmo_occ = LMO_frag(:,:,1)
+        ! Performa an C_mo -> C
 
-        deallocate(CMO_frag, LMO_frag, LMO_rot, nmo_frag, nlo_frag, frag_bias, P12)
+        ! C_lmo_occ (nao x nocc) = C_mo(:,1:nocc) @ U_occ
+        allocate(c_lmo_occ(nao_sm, nocc_sm))
+        call dgemm('N', 'N', nao_sm, nocc_sm, nocc_sm, 1.0d0, frag_scf_info(0)%C_mo(:, 1:nocc_sm), nao_sm, &
+                   LMO_rot(:,:,1), nocc_sm, 0.0d0, c_lmo_occ, nao_sm)
+
+        U_occ = LMO_rot(:,:,1)
+   
+        nlo_frag_occ = nlo_frag
+
+        deallocate(CMO_frag, LMO_frag, LMO_rot,nlo_frag, nmo_frag, frag_bias, P12)
 
         ! ==================================================================
         !  VALENCE VIRTUAL LOCALIZATION
@@ -646,6 +656,7 @@ contains
         call Localization(CMO_frag, LMO_frag, nmo_frag, 2, LMO_rot)
 
         allocate(nlo_frag(nfrags))
+        allocate(nlo_frag_vir(nfrags))
         allocate(frag_bias(nfrags))
         frag_bias = 0.0d0
         call sort_on_fragments(LMO_frag, nmo_frag, nlo_frag, frag_bias, LMO_rot)
@@ -658,9 +669,16 @@ contains
         end do
         call print_orbital_populations(CMO_frag, LMO_frag, LMO_rot, frag_scf_info(0)%mo_energies(nocc_sm+1:nocc_sm+nvir_sm), nmo_frag, nfrags, 'VIR_VAL')
 
-        allocate(lmo_vir(size(LMO_frag, 1), size(LMO_frag, 2)))
-        lmo_vir = LMO_frag(:,:,1)
+    
+        allocate(U_vir(size(LMO_rot, 1), size(LMO_rot, 2)))
 
+        allocate(c_lmo_vir(nao_sm, nvir_sm))
+        call dgemm('N', 'N', nao_sm, nvir_sm, nvir_sm, 1.0d0, frag_scf_info(0)%C_mo(:, nocc_sm+1:nocc_sm+nvir_sm), nao_sm, &
+                   LMO_rot(:,:,1), nvir_sm, 0.0d0, c_lmo_vir, nao_sm)
+        U_vir = LMO_rot(:,:,1)
+
+
+      
         ! ==================================================================
         !  HARD VIRTUAL LOCALIZATION  (ICO / IVO step from original ROSE)
         !  Reuses: build_iao_coefficients, Localization, sort_on_fragments,
@@ -772,6 +790,8 @@ contains
         else
             if (present(lmo_vir_hard)) allocate(lmo_vir_hard(0, 0))
         end if
+
+        nlo_frag_vir = nlo_frag
 
         deallocate(CMO_frag, LMO_frag, LMO_rot, nmo_frag, nlo_frag, frag_bias, P12)
     end subroutine run_rose_localization

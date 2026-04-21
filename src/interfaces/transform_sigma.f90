@@ -98,6 +98,7 @@ module sigma_build
     end subroutine transform_sigma_ao_mo
 
 
+
     ! Apply the two-electron kernel to sigma_init (nvir x nocc, MO basis).
     ! Returns sigma_out (nvir x nocc, MO basis) = C_vir^T [J - 0.5*K][D_sym] C_occ
     ! where D_sym = C_vir*sigma_init*C_occ^T + transpose.
